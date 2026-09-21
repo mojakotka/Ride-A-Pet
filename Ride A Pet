@@ -26,7 +26,12 @@ local LP = Players.LocalPlayer
 
 local TAB_NAME = "Ride a Pet"
 local AUTO_FARM_TAB_NAME = "Auto Farm"
-local UI_PREFIX = "pet_rider_"
+
+-- Separate prefixes so the UI library cannot confuse
+-- Tracking controls with Auto Farm controls.
+local TRACKING_UI_PREFIX = "pet_rider_tracking_"
+local AUTO_FARM_UI_PREFIX = "pet_rider_autofarm_"
+local ACTION_UI_PREFIX = "pet_rider_action_"
 
 local MAX_NODES = 180
 
@@ -135,12 +140,10 @@ end
 local chanceLabels = {}
 
 for i = 1, #chanceTiers do
-
     chanceLabels[i] =
         encodeSuffix(
             chanceTiers[i]
         )
-
 end
 
 --==================================================
@@ -154,8 +157,9 @@ local overlayState = {
 
     tierIndex = 1,
 
-    -- Tracking has its own chance index.
+    -- Tracking chance is completely independent.
     trackingChanceIndex = 1,
+    trackingMinChance = chanceTiers[1] or 0,
 
     renderDistance = 200000,
 
@@ -178,21 +182,106 @@ local movementConfig = {
 local autoFarm = false
 local autoFarmActionBusy = false
 
--- Completely independent from tracking.
+-- Auto Farm chance is completely independent.
 local autoFarmChanceIndex = 1
-local autoFarmMinChance =
-    chanceTiers[1]
-    or 0
+local autoFarmMinChance = chanceTiers[1] or 0
 
 local autoFarmSecondTeleportDelay = 0.35
 local autoFarmPickupDelay = 0.45
 local autoFarmPostPickupDelay = 0.75
 
--- Plot return speed
 local autoFarmReturnSpeed = 25
-
--- Waypoint tween speed
 local waypointTweenSpeed = 50
+
+--==================================================
+-- CHANCE INDEX NORMALIZER
+--==================================================
+--
+-- Different UI libraries sometimes send Combo indices
+-- as either:
+--
+-- 0, 1, 2, 3...
+--
+-- or:
+--
+-- 1, 2, 3, 4...
+--
+-- This function handles both formats.
+--
+-- 0 is always treated as the first item.
+-- Values inside the valid 1..#chanceTiers range are
+-- treated as already 1-based.
+--
+--==================================================
+
+local function normalizeChanceIndex(index)
+
+    local numericIndex =
+        tonumber(index)
+
+    if numericIndex == nil then
+        return 1
+    end
+
+    numericIndex =
+        math.floor(
+            numericIndex
+        )
+
+    if numericIndex <= 0 then
+        return 1
+    end
+
+    if numericIndex > #chanceTiers then
+        numericIndex = #chanceTiers
+    end
+
+    return numericIndex
+end
+
+--==================================================
+-- TRACKING CHANCE SETTER
+--==================================================
+
+local function setTrackingMinimumChance(index)
+
+    local selectedIndex =
+        normalizeChanceIndex(
+            index
+        )
+
+    overlayState.trackingChanceIndex =
+        selectedIndex
+
+    overlayState.trackingMinChance =
+        chanceTiers[
+            selectedIndex
+        ]
+        or 0
+
+end
+
+--==================================================
+-- AUTO FARM CHANCE SETTER
+--==================================================
+
+local function setAutoFarmMinimumChance(index)
+
+    local selectedIndex =
+        normalizeChanceIndex(
+            index
+        )
+
+    autoFarmChanceIndex =
+        selectedIndex
+
+    autoFarmMinChance =
+        chanceTiers[
+            selectedIndex
+        ]
+        or 0
+
+end
 
 --==================================================
 -- AUTO FARM AIR HOLD
@@ -734,6 +823,7 @@ local function getCachedNode(node)
     nodeCache[node] = false
 
     return nil
+
 end
 
 --==================================================
@@ -778,11 +868,9 @@ local function validateNode(data)
         return false
     end
 
+    -- ONLY tracking minimum chance is used here.
     local minChance =
-        chanceTiers[
-            overlayState.trackingChanceIndex
-        ]
-        or 0
+        overlayState.trackingMinChance
 
     if data.chance < minChance then
         return false
@@ -811,65 +899,12 @@ end
 
 local function isEligibleAutoFarmTarget(data)
 
-    return data
-        and data.chance
-        >= autoFarmMinChance
-
-end
-
---==================================================
--- TRACKING MINIMUM CHANCE
---==================================================
-
-local function setTrackingMinimumChance(index)
-
-    local selectedIndex =
-        math.floor(
-            tonumber(index)
-            or 0
-        ) + 1
-
-    if selectedIndex < 1 then
-        selectedIndex = 1
+    if not data then
+        return false
     end
 
-    if selectedIndex > #chanceTiers then
-        selectedIndex = #chanceTiers
-    end
-
-    overlayState.trackingChanceIndex =
-        selectedIndex
-
-end
-
---==================================================
--- AUTO FARM MINIMUM CHANCE
---==================================================
-
-local function setAutoFarmMinimumChance(index)
-
-    local selectedIndex =
-        math.floor(
-            tonumber(index)
-            or 0
-        ) + 1
-
-    if selectedIndex < 1 then
-        selectedIndex = 1
-    end
-
-    if selectedIndex > #chanceTiers then
-        selectedIndex = #chanceTiers
-    end
-
-    autoFarmChanceIndex =
-        selectedIndex
-
-    autoFarmMinChance =
-        chanceTiers[
-            autoFarmChanceIndex
-        ]
-        or 0
+    -- ONLY Auto Farm minimum chance is used here.
+    return data.chance >= autoFarmMinChance
 
 end
 
@@ -1177,27 +1212,6 @@ end
 --==================================================
 -- CHECK EXACT TARGET EGG
 --==================================================
---
--- IMPORTANT:
---
--- This function DOES NOT call extractNodeData().
--- This is the main crash/performance fix.
---
--- It only checks the exact Instance that Auto Farm
--- originally selected.
---
--- The egg is considered picked up when:
---
--- 1. The original Instance no longer has a Parent.
--- 2. The original Instance is no longer inside
---    RenderedEggs.
---
--- No GetDescendants()
--- No chance parsing
--- No ESP filtering
--- No repeated egg scanning
---
---==================================================
 
 local function isEggPickedUp(originalEgg)
 
@@ -1212,7 +1226,6 @@ local function isEggPickedUp(originalEgg)
         return true
     end
 
-    -- Check exact Instance existence.
     local parent = nil
 
     pcall(function()
@@ -1223,7 +1236,6 @@ local function isEggPickedUp(originalEgg)
         return true
     end
 
-    -- Get RenderedEggs.
     local renderedEggs = nil
 
     pcall(function()
@@ -1239,8 +1251,6 @@ local function isEggPickedUp(originalEgg)
         return false
     end
 
-    -- Check ONLY whether the exact object is
-    -- still inside RenderedEggs.
     local stillInside = false
 
     pcall(function()
@@ -1256,7 +1266,6 @@ local function isEggPickedUp(originalEgg)
         return true
     end
 
-    -- Same object still exists.
     return false
 
 end
@@ -1297,169 +1306,6 @@ local function waitForEggPickup(
         originalEgg
     )
 
-end
-
---==================================================
--- PLOT OWNERSHIP
---==================================================
-
-local function plotBelongsToLocalPlayer(plot)
-
-    local ownerNames = {
-        "Owner",
-        "OwnerName",
-        "Player",
-        "PlayerName"
-    }
-
-    local ownerIds = {
-        "OwnerUserId",
-        "UserId",
-        "PlayerUserId"
-    }
-
-    for _, name in ipairs(
-        ownerNames
-    ) do
-
-        local valueObject =
-            plot:FindFirstChild(
-                name,
-                true
-            )
-
-        if valueObject then
-
-            if valueObject:IsA(
-                "ObjectValue"
-            )
-            and valueObject.Value == LP then
-
-                return true
-            end
-
-            if valueObject:IsA(
-                "StringValue"
-            )
-            and valueObject.Value == LP.Name then
-
-                return true
-            end
-        end
-
-        local attribute =
-            plot:GetAttribute(
-                name
-            )
-
-        if attribute == LP
-            or attribute == LP.Name then
-
-            return true
-        end
-    end
-
-    for _, name in ipairs(
-        ownerIds
-    ) do
-
-        local valueObject =
-            plot:FindFirstChild(
-                name,
-                true
-            )
-
-        if valueObject
-            and valueObject:IsA(
-                "IntValue"
-            )
-            and valueObject.Value
-                == LP.UserId then
-
-            return true
-        end
-
-        if plot:GetAttribute(
-            name
-        ) == LP.UserId then
-
-            return true
-        end
-    end
-
-    if plot.Name == LP.Name
-        or plot.Name
-            == tostring(
-                LP.UserId
-            ) then
-
-        return true
-    end
-
-    for _, item in ipairs(
-        plot:GetDescendants()
-    ) do
-
-        if item:IsA(
-            "ObjectValue"
-        )
-        and item.Value == LP then
-
-            return true
-        end
-
-        if item:IsA(
-            "StringValue"
-        )
-        and item.Value == LP.Name then
-
-            return true
-        end
-
-        if (
-            item:IsA("IntValue")
-            or item:IsA("NumberValue")
-        )
-        and item.Value
-            == LP.UserId then
-
-            return true
-        end
-
-        for attributeName, attributeValue
-            in pairs(
-                item:GetAttributes()
-            ) do
-
-            local name =
-                string.lower(
-                    attributeName
-                )
-
-            if string.find(
-                name,
-                "owner"
-            )
-            or string.find(
-                name,
-                "player"
-            )
-            or string.find(
-                name,
-                "user"
-            ) then
-
-                if attributeValue == LP
-                    or attributeValue == LP.Name
-                    or attributeValue == LP.UserId then
-
-                    return true
-                end
-            end
-        end
-    end
-
-    return false
 end
 
 --==================================================
@@ -1930,7 +1776,7 @@ UI.AddTab(
         )
 
         moveGroup:SliderInt(
-            UI_PREFIX .. "depth_slider",
+            ACTION_UI_PREFIX .. "depth_slider",
             "Submerge Depth",
             10,
             250,
@@ -1975,7 +1821,7 @@ UI.AddTab(
             )
 
         visGroup:Toggle(
-            UI_PREFIX .. "master_switch",
+            TRACKING_UI_PREFIX .. "master_switch",
             "Display Overlays",
             true,
             function(value)
@@ -1987,28 +1833,44 @@ UI.AddTab(
         )
 
         visGroup:Combo(
-            UI_PREFIX .. "tier_req",
+            TRACKING_UI_PREFIX .. "tier_req",
             "Minimum Tier",
             tierOrder,
             0,
             function(index)
 
-                overlayState.tierIndex =
+                local selectedIndex =
                     math.floor(
                         tonumber(index)
                         or 0
                     ) + 1
 
+                if selectedIndex < 1 then
+                    selectedIndex = 1
+                end
+
+                if selectedIndex > #tierOrder then
+                    selectedIndex = #tierOrder
+                end
+
+                overlayState.tierIndex =
+                    selectedIndex
+
             end
         )
 
+        --==================================================
+        -- TRACKING CHANCE
+        --==================================================
+
         visGroup:Combo(
-            UI_PREFIX .. "tracking_chance_req",
-            "Minimum Chance",
+            TRACKING_UI_PREFIX .. "chance_req",
+            "Tracking Minimum Chance",
             chanceLabels,
             0,
             function(index)
 
+                -- This ONLY changes tracking.
                 setTrackingMinimumChance(
                     index
                 )
@@ -2017,7 +1879,7 @@ UI.AddTab(
         )
 
         visGroup:SliderInt(
-            UI_PREFIX .. "dist_limit",
+            TRACKING_UI_PREFIX .. "dist_limit",
             "Maximum Range",
             100,
             200000,
@@ -2034,7 +1896,7 @@ UI.AddTab(
         visGroup:Spacing()
 
         visGroup:Toggle(
-            UI_PREFIX .. "render_id",
+            TRACKING_UI_PREFIX .. "render_id",
             "Render Identity",
             true,
             function(value)
@@ -2046,7 +1908,7 @@ UI.AddTab(
         )
 
         visGroup:Toggle(
-            UI_PREFIX .. "render_tier",
+            TRACKING_UI_PREFIX .. "render_tier",
             "Render Tier",
             true,
             function(value)
@@ -2058,7 +1920,7 @@ UI.AddTab(
         )
 
         visGroup:Toggle(
-            UI_PREFIX .. "render_chance",
+            TRACKING_UI_PREFIX .. "render_chance",
             "Render Chance",
             true,
             function(value)
@@ -2087,7 +1949,7 @@ UI.AddTab(
             )
 
         farmGroup:Toggle(
-            UI_PREFIX .. "auto_farm",
+            AUTO_FARM_UI_PREFIX .. "toggle",
             "Auto Farm",
             false,
             function(value)
@@ -2099,13 +1961,18 @@ UI.AddTab(
             end
         )
 
+        --==================================================
+        -- AUTO FARM CHANCE
+        --==================================================
+
         farmGroup:Combo(
-            UI_PREFIX .. "auto_farm_min_chance",
-            "Minimum Egg Chance",
+            AUTO_FARM_UI_PREFIX .. "chance_req",
+            "Auto Farm Minimum Chance",
             chanceLabels,
             0,
             function(index)
 
+                -- This ONLY changes Auto Farm.
                 setAutoFarmMinimumChance(
                     index
                 )
@@ -2528,7 +2395,7 @@ renderTick =
                             if type(a)
                                 == "number"
                                 and type(b)
-                                == "number" then
+                                    == "number" then
 
                                 screenPosition =
                                     Vector2.new(
@@ -2774,10 +2641,6 @@ task.spawn(
                 local now =
                     tick()
 
-                --==============================================
-                -- FIND TARGET
-                --==============================================
-
                 if not autoFarmActionBusy
                     and now >= nextScan then
 
@@ -2811,10 +2674,6 @@ task.spawn(
                     autoFarmActionBusy =
                         true
 
-                    --==============================================
-                    -- GET LIVE VERSION OF SAME TARGET
-                    --==============================================
-
                     local liveEgg =
                         getCachedNode(
                             bestEgg.object
@@ -2833,10 +2692,6 @@ task.spawn(
                         local eggPos =
                             bestEgg.core.Position
 
-                        --==========================================
-                        -- FIRST TELEPORT
-                        --==========================================
-
                         root.CFrame =
                             CFrame.new(
                                 eggPos.X,
@@ -2848,10 +2703,6 @@ task.spawn(
 
                         task.spawn(
                             function()
-
-                                --==================================
-                                -- WAIT BEFORE SECOND TELEPORT
-                                --==================================
 
                                 task.wait(
                                     autoFarmSecondTeleportDelay
@@ -2868,10 +2719,6 @@ task.spawn(
                                     return
                                 end
 
-                                --==================================
-                                -- CHECK SAME EXACT EGG
-                                --==================================
-
                                 local currentCharacter =
                                     LP.Character
 
@@ -2881,32 +2728,19 @@ task.spawn(
                                         "HumanoidRootPart"
                                     )
 
-                                -- IMPORTANT:
-                                --
-                                -- We get the live data once here
-                                -- before the pickup attempt.
-                                --
-                                -- After this point, pickup
-                                -- verification DOES NOT parse
-                                -- the egg again.
-                                --
+                                -- Capture the exact target once.
+                                -- Do not re-parse it after pickup.
                                 local currentEgg =
-                                    bestEgg.object
-                                    and getCachedNode(
-                                        bestEgg.object
-                                    )
+                                    bestEgg
 
                                 if currentRoot
                                     and currentEgg
+                                    and currentEgg.object
                                     and currentEgg.core
                                     and currentEgg.core.Parent then
 
                                     local secondEggPos =
                                         currentEgg.core.Position
-
-                                    --==============================
-                                    -- SECOND TELEPORT
-                                    --==============================
 
                                     currentRoot.CFrame =
                                         CFrame.new(
@@ -2924,17 +2758,6 @@ task.spawn(
                                     if autoFarm
                                         and overlayState.active then
 
-                                        --==========================
-                                        -- PICKUP
-                                        --==========================
-                                        --
-                                        -- ONE E ATTEMPT ONLY.
-                                        --
-                                        -- The old code retried E and
-                                        -- repeatedly parsed the egg.
-                                        -- That has been removed.
-                                        --==========================
-
                                         local pickupStarted =
                                             triggerEggPickup(
                                                 currentEgg
@@ -2951,10 +2774,6 @@ task.spawn(
                                                 )
 
                                         end
-
-                                        --==============================
-                                        -- PICKUP RESULT
-                                        --==============================
 
                                         if pickupConfirmed then
 
@@ -2987,13 +2806,6 @@ task.spawn(
                                                             false
                                                         )
 
-                                                        notify(
-                                                            AUTO_FARM_TAB_NAME,
-                                                            "Could not return to waypoint",
-                                                            3,
-                                                            10
-                                                        )
-
                                                     end
 
                                                 else
@@ -3018,18 +2830,6 @@ task.spawn(
                                             end
 
                                         else
-
-                                            --==========================
-                                            -- NOT CONFIRMED
-                                            --==========================
-                                            --
-                                            -- Do not retry E.
-                                            -- Do not return to plot.
-                                            --
-                                            -- Release the hold and let
-                                            -- the normal scanner find the
-                                            -- next target.
-                                            --==========================
 
                                             releaseAutoFarmAirHold()
 
@@ -3090,7 +2890,7 @@ task.spawn(
 
 notify(
     TAB_NAME,
-    "Ride a Pet loaded - Pickup verification enabled",
+    "Ride a Pet loaded - Tracking and Auto Farm chances separated",
     3,
     10
 )
