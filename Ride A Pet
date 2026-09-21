@@ -27,8 +27,6 @@ local LP = Players.LocalPlayer
 local TAB_NAME = "Ride a Pet"
 local AUTO_FARM_TAB_NAME = "Auto Farm"
 
--- Separate prefixes so the UI library cannot confuse
--- Tracking controls with Auto Farm controls.
 local TRACKING_UI_PREFIX = "pet_rider_tracking_"
 local AUTO_FARM_UI_PREFIX = "pet_rider_autofarm_"
 local ACTION_UI_PREFIX = "pet_rider_action_"
@@ -39,7 +37,6 @@ local REFRESH_RATE = 0.75
 local ESP_REFRESH_RATE = 1 / 30
 local AUTO_FARM_SCAN_RATE = 0.35
 
--- Pickup verification
 local AUTO_FARM_PICKUP_CHECK_TIME = 3
 local AUTO_FARM_PICKUP_CHECK_INTERVAL = 0.15
 
@@ -194,49 +191,63 @@ local autoFarmReturnSpeed = 25
 local waypointTweenSpeed = 50
 
 --==================================================
--- CHANCE INDEX NORMALIZER
+-- CHANCE INDEX
 --==================================================
 --
--- Different UI libraries sometimes send Combo indices
--- as either:
+-- IMPORTANT:
 --
--- 0, 1, 2, 3...
+-- The Combo callback is ZERO-BASED.
 --
--- or:
+-- 0  -> chanceTiers[1]  -> 0
+-- 1  -> chanceTiers[2]  -> 5
+-- 2  -> chanceTiers[3]  -> 30
+-- 3  -> chanceTiers[4]  -> 100
+-- 4  -> chanceTiers[5]  -> 500
+-- 5  -> chanceTiers[6]  -> 1K
+-- 6  -> chanceTiers[7]  -> 10K
+-- 7  -> chanceTiers[8]  -> 100K
+-- 8  -> chanceTiers[9]  -> 1M
+-- 9  -> chanceTiers[10] -> 10M
+-- 10 -> chanceTiers[11] -> 1B
+-- 11 -> chanceTiers[12] -> 100B
+-- 12 -> chanceTiers[13] -> 1T
 --
--- 1, 2, 3, 4...
+-- Therefore the callback index MUST have +1
+-- before accessing chanceTiers.
 --
--- This function handles both formats.
---
--- 0 is always treated as the first item.
--- Values inside the valid 1..#chanceTiers range are
--- treated as already 1-based.
---
---==================================================
+-- This fixes the bug where selecting 1B could
+-- internally become 10M and allow 300M eggs.
 
-local function normalizeChanceIndex(index)
+local function getChanceIndexFromCombo(index)
 
-    local numericIndex =
+    local comboIndex =
         tonumber(index)
 
-    if numericIndex == nil then
-        return 1
+    if comboIndex == nil then
+        comboIndex = 0
     end
 
-    numericIndex =
+    comboIndex =
         math.floor(
-            numericIndex
+            comboIndex
         )
 
-    if numericIndex <= 0 then
-        return 1
+    if comboIndex < 0 then
+        comboIndex = 0
     end
 
-    if numericIndex > #chanceTiers then
-        numericIndex = #chanceTiers
+    local selectedIndex =
+        comboIndex + 1
+
+    if selectedIndex < 1 then
+        selectedIndex = 1
     end
 
-    return numericIndex
+    if selectedIndex > #chanceTiers then
+        selectedIndex = #chanceTiers
+    end
+
+    return selectedIndex
 end
 
 --==================================================
@@ -246,7 +257,7 @@ end
 local function setTrackingMinimumChance(index)
 
     local selectedIndex =
-        normalizeChanceIndex(
+        getChanceIndexFromCombo(
             index
         )
 
@@ -258,7 +269,6 @@ local function setTrackingMinimumChance(index)
             selectedIndex
         ]
         or 0
-
 end
 
 --==================================================
@@ -268,7 +278,7 @@ end
 local function setAutoFarmMinimumChance(index)
 
     local selectedIndex =
-        normalizeChanceIndex(
+        getChanceIndexFromCombo(
             index
         )
 
@@ -280,7 +290,6 @@ local function setAutoFarmMinimumChance(index)
             selectedIndex
         ]
         or 0
-
 end
 
 --==================================================
@@ -301,20 +310,16 @@ local function setAutoFarmAirHold(value)
         autoFarmAirPosition = nil
 
         if autoFarmAirConn then
-
             autoFarmAirConn:Disconnect()
             autoFarmAirConn = nil
-
         end
 
         return
     end
 
     if autoFarmAirConn then
-
         autoFarmAirConn:Disconnect()
         autoFarmAirConn = nil
-
     end
 
     local character =
@@ -467,13 +472,13 @@ local function notify(
     title =
         tostring(
             title
-                or "Notification"
+            or "Notification"
         )
 
     message =
         tostring(
             message
-                or ""
+            or ""
         )
 
     duration =
@@ -519,8 +524,11 @@ local function notify(
             end
 
             task.wait(0.25)
+
         end
+
     end)
+
 end
 
 --==================================================
@@ -672,6 +680,7 @@ local function findChanceText(
             node:FindFirstChild(
                 "EggLuck"
             )
+
     end
 
     if ui then
@@ -689,7 +698,9 @@ local function findChanceText(
             ) then
 
             return luck
+
         end
+
     end
 
     local descendants =
@@ -712,7 +723,9 @@ local function findChanceText(
             if parsed then
                 return object
             end
+
         end
+
     end
 
     return nil
@@ -805,6 +818,7 @@ local function getCachedNode(node)
         and cached.core.Parent then
 
         return cached
+
     end
 
     local parsed =
@@ -818,12 +832,12 @@ local function getCachedNode(node)
             parsed
 
         return parsed
+
     end
 
     nodeCache[node] = false
 
     return nil
-
 end
 
 --==================================================
@@ -868,7 +882,6 @@ local function validateNode(data)
         return false
     end
 
-    -- ONLY tracking minimum chance is used here.
     local minChance =
         overlayState.trackingMinChance
 
@@ -903,9 +916,7 @@ local function isEligibleAutoFarmTarget(data)
         return false
     end
 
-    -- ONLY Auto Farm minimum chance is used here.
     return data.chance >= autoFarmMinChance
-
 end
 
 --==================================================
@@ -918,10 +929,8 @@ local platformStandHumanoid = nil
 local function restoreMovementState()
 
     if ghostConn then
-
         ghostConn:Disconnect()
         ghostConn = nil
-
     end
 
     for part, canCollide in pairs(
@@ -937,7 +946,9 @@ local function restoreMovementState()
                     canCollide
 
             end)
+
         end
+
     end
 
     table.clear(
@@ -953,10 +964,10 @@ local function restoreMovementState()
                 false
 
         end)
+
     end
 
     platformStandHumanoid = nil
-
 end
 
 --==================================================
@@ -992,7 +1003,6 @@ local function applyGhosting()
         end
 
     end
-
 end
 
 --==================================================
@@ -1044,10 +1054,8 @@ local function submergeCharacter()
     end
 
     if glideConn then
-
         glideConn:Disconnect()
         glideConn = nil
-
     end
 
     restoreMovementState()
@@ -1136,10 +1144,8 @@ local function submergeCharacter()
                 if progress >= 1 then
 
                     if glideConn then
-
                         glideConn:Disconnect()
                         glideConn = nil
-
                     end
 
                     notify(
@@ -1159,9 +1165,12 @@ local function submergeCharacter()
                                 restoreMovementState()
 
                             end
+
                         end
                     )
+
                 end
+
             end
         )
 end
@@ -1206,7 +1215,6 @@ local function triggerEggPickup(egg)
         end)
 
     return success
-
 end
 
 --==================================================
@@ -1267,7 +1275,6 @@ local function isEggPickedUp(originalEgg)
     end
 
     return false
-
 end
 
 --==================================================
@@ -1305,7 +1312,6 @@ local function waitForEggPickup(
     return isEggPickedUp(
         originalEgg
     )
-
 end
 
 --==================================================
@@ -1473,7 +1479,6 @@ local function tweenToPlotWaypoint()
     end
 
     return true
-
 end
 
 --==================================================
@@ -1562,11 +1567,10 @@ local function findBestAutoFarmTarget()
     end
 
     return bestEgg
-
 end
 
 --==================================================
--- JUMP TO BEST TARGET
+-- JUMP TO BEST TIER
 --==================================================
 
 local function jumpToTopTier()
@@ -1678,6 +1682,7 @@ local function jumpToTopTier()
         if root then
             root.CFrame = newCF
         end
+
     end
 
     notify(
@@ -1693,7 +1698,6 @@ local function jumpToTopTier()
         3,
         10
     )
-
 end
 
 --==================================================
@@ -1715,7 +1719,6 @@ for i = 1, MAX_NODES do
 
     labelCache[i] =
         txt
-
 end
 
 --==================================================
@@ -1870,7 +1873,6 @@ UI.AddTab(
             0,
             function(index)
 
-                -- This ONLY changes tracking.
                 setTrackingMinimumChance(
                     index
                 )
@@ -1972,7 +1974,6 @@ UI.AddTab(
             0,
             function(index)
 
-                -- This ONLY changes Auto Farm.
                 setAutoFarmMinimumChance(
                     index
                 )
@@ -2550,26 +2551,20 @@ _G.RidePetOverlay_Unload =
             waypointTravelToken + 1
 
         if inputBlock then
-
             inputBlock:Disconnect()
             inputBlock = nil
-
         end
 
         if glideConn then
-
             glideConn:Disconnect()
             glideConn = nil
-
         end
 
         restoreMovementState()
 
         if renderTick then
-
             renderTick:Disconnect()
             renderTick = nil
-
         end
 
         for i = 1, MAX_NODES do
@@ -2728,8 +2723,7 @@ task.spawn(
                                         "HumanoidRootPart"
                                     )
 
-                                -- Capture the exact target once.
-                                -- Do not re-parse it after pickup.
+                                -- Capture exact target once.
                                 local currentEgg =
                                     bestEgg
 
@@ -2830,6 +2824,10 @@ task.spawn(
                                             end
 
                                         else
+
+                                            -- Pickup failed.
+                                            -- Do NOT return to waypoint.
+                                            -- Rescan and retry.
 
                                             releaseAutoFarmAirHold()
 
