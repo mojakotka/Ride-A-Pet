@@ -1,0 +1,2735 @@
+--==================================================
+-- RIDE A PET - TRACKER + AUTO FARM
+--==================================================
+
+if _G.RidePetOverlay_Unload then
+    pcall(function()
+        _G.RidePetOverlay_Unload()
+    end)
+end
+
+--==================================================
+-- SERVICES
+--==================================================
+
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UIS = game:GetService("UserInputService")
+local Players = game:GetService("Players")
+local StarterGui = game:GetService("StarterGui")
+
+local LP = Players.LocalPlayer
+
+--==================================================
+-- CONFIG
+--==================================================
+
+local TAB_NAME = "Ride a Pet"
+local AUTO_FARM_TAB_NAME = "Auto Farm"
+local UI_PREFIX = "pet_rider_"
+
+local MAX_NODES = 180
+
+local REFRESH_RATE = 0.75
+local ESP_REFRESH_RATE = 1 / 30
+local AUTO_FARM_SCAN_RATE = 0.35
+
+--==================================================
+-- TIERS
+--==================================================
+
+local tierOrder = {
+    "All",
+    "Common",
+    "Rare",
+    "Epic",
+    "Legendary",
+    "Mythic",
+    "Divine",
+    "Ethereal"
+}
+
+local tierRank = {
+    Common = 1,
+    Rare = 2,
+    Epic = 3,
+    Legendary = 4,
+    Mythic = 5,
+    Divine = 6,
+    Ethereal = 7,
+}
+
+local tierColors = {
+    Common = Color3.fromRGB(225, 225, 225),
+    Rare = Color3.fromRGB(80, 170, 255),
+    Epic = Color3.fromRGB(190, 90, 255),
+    Legendary = Color3.fromRGB(255, 195, 55),
+    Mythic = Color3.fromRGB(255, 75, 135),
+    Divine = Color3.fromRGB(90, 255, 205),
+    Ethereal = Color3.fromRGB(255, 255, 120),
+}
+
+--==================================================
+-- CHANCE VALUES
+--==================================================
+
+local chanceTiers = {
+    0,
+    5,
+    30,
+    100,
+    500,
+    1000,
+    10000,
+    100000,
+    1000000,
+    10000000,
+    1000000000,
+    100000000000,
+    1000000000000
+}
+
+local function encodeSuffix(value)
+
+    if value >= 1e12 then
+        return string.format("%.1fT", value / 1e12)
+    end
+
+    if value >= 1e9 then
+        return string.format("%.1fB", value / 1e9)
+    end
+
+    if value >= 1e6 then
+        return string.format("%.1fM", value / 1e6)
+    end
+
+    if value >= 1e3 then
+        return string.format("%.1fK", value / 1e3)
+    end
+
+    return tostring(math.floor(value))
+end
+
+local chanceLabels = {}
+
+for i = 1, #chanceTiers do
+    chanceLabels[i] =
+        encodeSuffix(
+            chanceTiers[i]
+        )
+end
+
+--==================================================
+-- STATE
+--==================================================
+
+local overlayState = {
+
+    active = true,
+    showVisuals = true,
+
+    tierIndex = 1,
+
+    -- IMPORTANT:
+    -- Tracking gets its own chance index.
+    trackingChanceIndex = 1,
+
+    renderDistance = 200000,
+
+    displayName = true,
+    displayTier = true,
+    displayChance = true,
+}
+
+local movementConfig = {
+    submergeDepth = 60,
+    glideSpeed = 120,
+    ghostTime = 5,
+}
+
+--==================================================
+-- AUTO FARM STATE
+--==================================================
+
+local autoFarm = false
+local autoFarmActionBusy = false
+
+-- IMPORTANT:
+-- Auto Farm gets its own completely separate
+-- chance index and chance value.
+local autoFarmChanceIndex = 1
+local autoFarmMinChance = chanceTiers[1] or 0
+
+local autoFarmSecondTeleportDelay = 0.35
+local autoFarmPickupDelay = 0.45
+local autoFarmPostPickupDelay = 0.75
+
+-- Plot return speed
+local autoFarmReturnSpeed = 25
+
+-- Waypoint tween speed
+local waypointTweenSpeed = 50
+
+--==================================================
+-- AUTO FARM AIR HOLD
+--==================================================
+
+local autoFarmAirHold = false
+local autoFarmAirPosition = nil
+local autoFarmAirConn = nil
+
+local function setAutoFarmAirHold(value)
+
+    autoFarmAirHold =
+        value == true
+
+    if not autoFarmAirHold then
+
+        autoFarmAirPosition = nil
+
+        if autoFarmAirConn then
+
+            autoFarmAirConn:Disconnect()
+            autoFarmAirConn = nil
+
+        end
+
+        return
+    end
+
+    if autoFarmAirConn then
+
+        autoFarmAirConn:Disconnect()
+        autoFarmAirConn = nil
+
+    end
+
+    local character =
+        LP.Character
+
+    local root =
+        character
+        and character:FindFirstChild(
+            "HumanoidRootPart"
+        )
+
+    if root then
+
+        autoFarmAirPosition =
+            root.Position
+
+    else
+
+        autoFarmAirPosition = nil
+
+    end
+
+    autoFarmAirConn =
+        RunService.RenderStepped:Connect(
+            function()
+
+                if not autoFarmAirHold
+                    or not overlayState.active then
+
+                    return
+                end
+
+                local currentCharacter =
+                    LP.Character
+
+                local currentRoot =
+                    currentCharacter
+                    and currentCharacter:FindFirstChild(
+                        "HumanoidRootPart"
+                    )
+
+                if not currentRoot then
+                    return
+                end
+
+                if not autoFarmAirPosition then
+
+                    autoFarmAirPosition =
+                        currentRoot.Position
+
+                end
+
+                pcall(function()
+
+                    currentRoot.CFrame =
+                        CFrame.new(
+                            autoFarmAirPosition
+                        )
+
+                    currentRoot.AssemblyLinearVelocity =
+                        Vector3.zero
+
+                    currentRoot.AssemblyAngularVelocity =
+                        Vector3.zero
+
+                end)
+            end
+        )
+end
+
+local function releaseAutoFarmAirHold()
+
+    setAutoFarmAirHold(false)
+
+end
+
+--==================================================
+-- WAYPOINT
+--==================================================
+
+local savedWaypoint =
+    _G.RidePetOverlay_PlotWaypoint
+
+local plotWaypointPosition =
+    savedWaypoint
+    and Vector3.new(
+        savedWaypoint.X,
+        savedWaypoint.Y,
+        savedWaypoint.Z
+    )
+    or nil
+
+local waypointTravelActive = false
+local waypointTravelToken = 0
+
+--==================================================
+-- KEYBINDS
+--==================================================
+
+local diveKey = nil
+local awaitDiveKey = false
+
+local topTargetKey = nil
+local awaitTopTargetKey = false
+
+local autoFarmKey = nil
+local awaitAutoFarmKey = false
+
+--==================================================
+-- CONNECTIONS
+--==================================================
+
+local ghostConn = nil
+local glideConn = nil
+local renderTick = nil
+local inputBlock = nil
+
+--==================================================
+-- CACHED DATA
+--==================================================
+
+local activeNodes = {}
+local activeNodeCount = 0
+
+local nodeCache = {}
+local labelCache = {}
+
+--==================================================
+-- NOTIFY
+--==================================================
+
+local externalNotify = nil
+
+pcall(function()
+
+    if type(_G.notify) == "function" then
+        externalNotify = _G.notify
+    end
+
+end)
+
+local function notify(
+    title,
+    message,
+    duration,
+    position
+)
+
+    title =
+        tostring(
+            title
+                or "Notification"
+        )
+
+    message =
+        tostring(
+            message
+                or ""
+        )
+
+    duration =
+        tonumber(duration)
+        or 3
+
+    if externalNotify then
+
+        pcall(function()
+
+            externalNotify(
+                title,
+                message,
+                duration,
+                position
+            )
+
+        end)
+
+        return
+    end
+
+    task.spawn(function()
+
+        for i = 1, 5 do
+
+            local success =
+                pcall(function()
+
+                    StarterGui:SetCore(
+                        "SendNotification",
+                        {
+                            Title = title,
+                            Text = message,
+                            Duration = duration
+                        }
+                    )
+
+                end)
+
+            if success then
+                return
+            end
+
+            task.wait(0.25)
+        end
+    end)
+end
+
+--==================================================
+-- CHANCE PARSER
+--==================================================
+
+local function decodeSuffix(text)
+
+    if text == nil then
+        return nil
+    end
+
+    local raw =
+        tostring(text)
+        :upper()
+        :gsub(",", "")
+        :gsub("%s+", "")
+
+    local baseNum, suffix =
+        raw:match(
+            "^([%d%.]+)([KMBTQ]?)$"
+        )
+
+    local finalNum =
+        tonumber(baseNum)
+
+    if not finalNum then
+        return nil
+    end
+
+    local multipliers = {
+        K = 1e3,
+        M = 1e6,
+        B = 1e9,
+        T = 1e12,
+        Q = 1e15,
+    }
+
+    return finalNum *
+        (
+            multipliers[suffix]
+            or 1
+        )
+end
+
+--==================================================
+-- RESOLVE TIER
+--==================================================
+
+local function resolveTier(chance)
+
+    if chance >= 1e11 then
+        return "Ethereal"
+    end
+
+    if chance >= 3e8 then
+        return "Divine"
+    end
+
+    if chance >= 9e4 then
+        return "Mythic"
+    end
+
+    if chance >= 1e4 then
+        return "Legendary"
+    end
+
+    if chance >= 500 then
+        return "Epic"
+    end
+
+    if chance >= 30 then
+        return "Rare"
+    end
+
+    return "Common"
+end
+
+--==================================================
+-- FIND EGG CORE
+--==================================================
+
+local function findEggCore(node)
+
+    if not node then
+        return nil
+    end
+
+    local core =
+        node:FindFirstChild("Handle")
+
+    if core
+        and core:IsA("BasePart") then
+
+        return core
+    end
+
+    core =
+        node:FindFirstChild("RootPart")
+
+    if core
+        and core:IsA("BasePart") then
+
+        return core
+    end
+
+    core =
+        node:FindFirstChild("EggBase")
+
+    if core
+        and core:IsA("BasePart") then
+
+        return core
+    end
+
+    core =
+        node.PrimaryPart
+
+    if core
+        and core:IsA("BasePart") then
+
+        return core
+    end
+
+    return node:FindFirstChildWhichIsA(
+        "BasePart",
+        true
+    )
+end
+
+--==================================================
+-- FIND CHANCE TEXT
+--==================================================
+
+local function findChanceText(node, core)
+
+    local ui =
+        core
+        and core:FindFirstChild(
+            "EggLuck"
+        )
+
+    if not ui then
+
+        ui =
+            node:FindFirstChild(
+                "EggLuck"
+            )
+    end
+
+    if ui then
+
+        local luck =
+            ui:FindFirstChild(
+                "Luck"
+            )
+
+        if luck
+            and (
+                luck:IsA("TextLabel")
+                or luck:IsA("TextButton")
+                or luck:IsA("TextBox")
+            ) then
+
+            return luck
+        end
+    end
+
+    local descendants =
+        node:GetDescendants()
+
+    for i = 1, #descendants do
+
+        local object =
+            descendants[i]
+
+        if object:IsA("TextLabel")
+            or object:IsA("TextButton")
+            or object:IsA("TextBox") then
+
+            local parsed =
+                decodeSuffix(
+                    object.Text
+                )
+
+            if parsed then
+                return object
+            end
+        end
+    end
+
+    return nil
+end
+
+--==================================================
+-- EXTRACT EGG DATA
+--==================================================
+
+local function extractNodeData(node)
+
+    if not node then
+        return nil
+    end
+
+    local core =
+        findEggCore(node)
+
+    if not core then
+        return nil
+    end
+
+    local textUI =
+        findChanceText(
+            node,
+            core
+        )
+
+    if not textUI then
+        return nil
+    end
+
+    local chanceVal =
+        decodeSuffix(
+            textUI.Text
+        )
+
+    if not chanceVal then
+        return nil
+    end
+
+    local tier =
+        resolveTier(
+            chanceVal
+        )
+
+    return {
+        object = node,
+        core = core,
+        identity = node.Name,
+        chance = chanceVal,
+        tier = tier,
+        tierRank =
+            tierRank[tier]
+            or 0,
+        color =
+            tierColors[tier]
+            or Color3.new(
+                1,
+                1,
+                1
+            ),
+    }
+end
+
+--==================================================
+-- NODE CACHE
+--==================================================
+
+local function getCachedNode(node)
+
+    local cached =
+        nodeCache[node]
+
+    if cached
+        and cached.object
+        and cached.object.Parent
+        and cached.core
+        and cached.core.Parent then
+
+        return cached
+    end
+
+    local parsed =
+        extractNodeData(
+            node
+        )
+
+    if parsed then
+
+        nodeCache[node] =
+            parsed
+
+        return parsed
+    end
+
+    nodeCache[node] = false
+
+    return nil
+end
+
+--==================================================
+-- CLEAR DEAD CACHE
+--==================================================
+
+local function cleanNodeCache()
+
+    for object, data in pairs(
+        nodeCache
+    ) do
+
+        if object == nil
+            or not object.Parent
+            or (
+                data
+                and (
+                    not data.core
+                    or not data.core.Parent
+                )
+            ) then
+
+            nodeCache[object] = nil
+        end
+    end
+end
+
+--==================================================
+-- TRACKING FILTER
+--
+-- Uses ONLY overlayState.trackingChanceIndex
+--==================================================
+
+local function validateNode(data)
+
+    if not data then
+        return false
+    end
+
+    if not overlayState.showVisuals then
+        return false
+    end
+
+    local minChance =
+        chanceTiers[
+            overlayState.trackingChanceIndex
+        ]
+        or 0
+
+    if data.chance < minChance then
+        return false
+    end
+
+    local chosenTier =
+        tierOrder[
+            overlayState.tierIndex
+        ]
+        or "All"
+
+    if chosenTier == "All" then
+        return true
+    end
+
+    local minRank =
+        tierRank[chosenTier]
+        or 0
+
+    return data.tierRank >= minRank
+end
+
+--==================================================
+-- AUTO FARM FILTER
+--
+-- Uses ONLY autoFarmMinChance
+--==================================================
+
+local function isEligibleAutoFarmTarget(data)
+
+    return data
+        and data.chance
+        >= autoFarmMinChance
+end
+
+--==================================================
+-- TRACKING MINIMUM CHANCE
+--
+-- Completely independent from Auto Farm.
+--==================================================
+
+local function setTrackingMinimumChance(index)
+
+    local selectedIndex =
+        math.floor(
+            tonumber(index)
+            or 0
+        ) + 1
+
+    if selectedIndex < 1 then
+        selectedIndex = 1
+    end
+
+    if selectedIndex > #chanceTiers then
+        selectedIndex = #chanceTiers
+    end
+
+    overlayState.trackingChanceIndex =
+        selectedIndex
+
+end
+
+--==================================================
+-- AUTO FARM MINIMUM CHANCE
+--
+-- Completely independent from Tracking.
+--==================================================
+
+local function setAutoFarmMinimumChance(index)
+
+    local selectedIndex =
+        math.floor(
+            tonumber(index)
+            or 0
+        ) + 1
+
+    if selectedIndex < 1 then
+        selectedIndex = 1
+    end
+
+    if selectedIndex > #chanceTiers then
+        selectedIndex = #chanceTiers
+    end
+
+    autoFarmChanceIndex =
+        selectedIndex
+
+    autoFarmMinChance =
+        chanceTiers[
+            autoFarmChanceIndex
+        ]
+        or 0
+
+end
+
+--==================================================
+-- RESTORE MOVEMENT
+--==================================================
+
+local originalCollisions = {}
+local platformStandHumanoid = nil
+
+local function restoreMovementState()
+
+    if ghostConn then
+
+        ghostConn:Disconnect()
+        ghostConn = nil
+
+    end
+
+    for part, canCollide in pairs(
+        originalCollisions
+    ) do
+
+        if part
+            and part.Parent then
+
+            pcall(function()
+
+                part.CanCollide =
+                    canCollide
+
+            end)
+        end
+    end
+
+    table.clear(
+        originalCollisions
+    )
+
+    if platformStandHumanoid
+        and platformStandHumanoid.Parent then
+
+        pcall(function()
+
+            platformStandHumanoid.PlatformStand =
+                false
+
+        end)
+    end
+
+    platformStandHumanoid = nil
+end
+
+--==================================================
+-- GHOSTING
+--==================================================
+
+local function applyGhosting()
+
+    local avatar =
+        LP.Character
+
+    if not avatar then
+        return
+    end
+
+    for _, piece in ipairs(
+        avatar:GetDescendants()
+    ) do
+
+        if piece:IsA(
+            "BasePart"
+        ) then
+
+            if originalCollisions[piece] == nil then
+
+                originalCollisions[piece] =
+                    piece.CanCollide
+
+            end
+
+            piece.CanCollide = false
+        end
+    end
+end
+
+--==================================================
+-- SUBMERGE
+--==================================================
+
+local function submergeCharacter()
+
+    local avatar =
+        LP.Character
+
+    if not avatar then
+
+        notify(
+            TAB_NAME,
+            "Character not found",
+            3,
+            10
+        )
+
+        return
+    end
+
+    local root =
+        avatar:FindFirstChild(
+            "HumanoidRootPart"
+        )
+        or avatar.PrimaryPart
+
+    local hum =
+        avatar:FindFirstChildOfClass(
+            "Humanoid"
+        )
+
+    if not root
+        or (
+            hum
+            and hum.Health <= 0
+        ) then
+
+        notify(
+            TAB_NAME,
+            "Character root not found",
+            3,
+            10
+        )
+
+        return
+    end
+
+    if glideConn then
+
+        glideConn:Disconnect()
+        glideConn = nil
+
+    end
+
+    restoreMovementState()
+
+    local originCF =
+        root.CFrame
+
+    local destCF =
+        CFrame.new(
+            originCF.Position.X,
+            originCF.Position.Y
+                - movementConfig.submergeDepth,
+            originCF.Position.Z
+        )
+
+    local timeToGlide =
+        math.clamp(
+            movementConfig.submergeDepth
+                / movementConfig.glideSpeed,
+            0.1,
+            2
+        )
+
+    local startTick =
+        tick()
+
+    ghostConn =
+        RunService.Stepped:Connect(
+            applyGhosting
+        )
+
+    platformStandHumanoid =
+        hum
+
+    if hum then
+
+        pcall(function()
+            hum.PlatformStand = true
+        end)
+    end
+
+    glideConn =
+        RunService.RenderStepped:Connect(
+            function()
+
+                if not root.Parent then
+
+                    if glideConn then
+                        glideConn:Disconnect()
+                        glideConn = nil
+                    end
+
+                    restoreMovementState()
+
+                    return
+                end
+
+                local progress =
+                    math.clamp(
+                        (
+                            tick()
+                            - startTick
+                        )
+                        / timeToGlide,
+                        0,
+                        1
+                    )
+
+                pcall(function()
+
+                    root.CFrame =
+                        originCF:Lerp(
+                            destCF,
+                            progress
+                        )
+
+                    root.AssemblyLinearVelocity =
+                        Vector3.zero
+
+                    root.AssemblyAngularVelocity =
+                        Vector3.zero
+
+                end)
+
+                if progress >= 1 then
+
+                    if glideConn then
+
+                        glideConn:Disconnect()
+                        glideConn = nil
+
+                    end
+
+                    notify(
+                        TAB_NAME,
+                        "Shifted underground",
+                        2,
+                        10
+                    )
+
+                    task.delay(
+                        movementConfig.ghostTime,
+                        function()
+
+                            if overlayState.active
+                                and not glideConn then
+
+                                restoreMovementState()
+
+                            end
+                        end
+                    )
+                end
+            end
+        )
+end
+
+--==================================================
+-- PICKUP
+--==================================================
+
+local function triggerEggPickup(egg)
+
+    if not egg
+        or not egg.core
+        or not egg.core.Parent then
+
+        return false
+    end
+
+    if type(keypress)
+        ~= "function"
+        or type(keyrelease)
+        ~= "function" then
+
+        notify(
+            AUTO_FARM_TAB_NAME,
+            "keypress/keyrelease is not available",
+            3,
+            10
+        )
+
+        return false
+    end
+
+    local success =
+        pcall(function()
+
+            keypress(0x45)
+
+            task.wait(2)
+
+            keyrelease(0x45)
+
+        end)
+
+    return success
+end
+
+--==================================================
+-- PLOT OWNERSHIP
+--==================================================
+
+local function plotBelongsToLocalPlayer(plot)
+
+    local ownerNames = {
+        "Owner",
+        "OwnerName",
+        "Player",
+        "PlayerName"
+    }
+
+    local ownerIds = {
+        "OwnerUserId",
+        "UserId",
+        "PlayerUserId"
+    }
+
+    for _, name in ipairs(
+        ownerNames
+    ) do
+
+        local valueObject =
+            plot:FindFirstChild(
+                name,
+                true
+            )
+
+        if valueObject then
+
+            if valueObject:IsA(
+                "ObjectValue"
+            )
+            and valueObject.Value == LP then
+
+                return true
+            end
+
+            if valueObject:IsA(
+                "StringValue"
+            )
+            and valueObject.Value == LP.Name then
+
+                return true
+            end
+        end
+
+        local attribute =
+            plot:GetAttribute(
+                name
+            )
+
+        if attribute == LP
+            or attribute == LP.Name then
+
+            return true
+        end
+    end
+
+    for _, name in ipairs(
+        ownerIds
+    ) do
+
+        local valueObject =
+            plot:FindFirstChild(
+                name,
+                true
+            )
+
+        if valueObject
+            and valueObject:IsA(
+                "IntValue"
+            )
+            and valueObject.Value
+                == LP.UserId then
+
+            return true
+        end
+
+        if plot:GetAttribute(
+            name
+        ) == LP.UserId then
+
+            return true
+        end
+    end
+
+    if plot.Name == LP.Name
+        or plot.Name
+            == tostring(
+                LP.UserId
+            ) then
+
+        return true
+    end
+
+    for _, item in ipairs(
+        plot:GetDescendants()
+    ) do
+
+        if item:IsA(
+            "ObjectValue"
+        )
+        and item.Value == LP then
+
+            return true
+        end
+
+        if item:IsA(
+            "StringValue"
+        )
+        and item.Value == LP.Name then
+
+            return true
+        end
+
+        if (
+            item:IsA("IntValue")
+            or item:IsA("NumberValue")
+        )
+        and item.Value
+            == LP.UserId then
+
+            return true
+        end
+
+        for attributeName, attributeValue
+            in pairs(
+                item:GetAttributes()
+            ) do
+
+            local name =
+                string.lower(
+                    attributeName
+                )
+
+            if string.find(
+                name,
+                "owner"
+            )
+            or string.find(
+                name,
+                "player"
+            )
+            or string.find(
+                name,
+                "user"
+            ) then
+
+                if attributeValue == LP
+                    or attributeValue == LP.Name
+                    or attributeValue == LP.UserId then
+
+                    return true
+                end
+            end
+        end
+    end
+
+    return false
+end
+
+--==================================================
+-- SET WAYPOINT
+--==================================================
+
+local function setPlotWaypoint()
+
+    local character =
+        LP.Character
+
+    local root =
+        character
+        and (
+            character:FindFirstChild(
+                "HumanoidRootPart"
+            )
+            or character:FindFirstChild(
+                "RootPart"
+            )
+            or character.PrimaryPart
+        )
+
+    if not root then
+
+        notify(
+            TAB_NAME,
+            "Waypoint not set: character root not found",
+            3,
+            10
+        )
+
+        return false
+    end
+
+    plotWaypointPosition =
+        root.Position
+
+    _G.RidePetOverlay_PlotWaypoint = {
+        X = plotWaypointPosition.X,
+        Y = plotWaypointPosition.Y,
+        Z = plotWaypointPosition.Z,
+    }
+
+    notify(
+        TAB_NAME,
+        "Plot waypoint saved at your current position",
+        3,
+        10
+    )
+
+    return true
+end
+
+--==================================================
+-- WAYPOINT TWEEN
+-- SPEED = 50
+--==================================================
+
+local function tweenToPlotWaypoint()
+
+    local character =
+        LP.Character
+
+    local root =
+        character
+        and (
+            character:FindFirstChild(
+                "HumanoidRootPart"
+            )
+            or character:FindFirstChild(
+                "RootPart"
+            )
+            or character.PrimaryPart
+        )
+
+    if not root
+        or not root:IsA(
+            "BasePart"
+        )
+        or not plotWaypointPosition then
+
+        return false
+    end
+
+    waypointTravelToken =
+        waypointTravelToken + 1
+
+    local travelToken =
+        waypointTravelToken
+
+    waypointTravelActive = true
+
+    local targetCFrame =
+        CFrame.new(
+            plotWaypointPosition.X,
+            plotWaypointPosition.Y + 3,
+            plotWaypointPosition.Z
+        )
+
+    local startCFrame =
+        root.CFrame
+
+    local distance =
+        (
+            root.Position
+            - targetCFrame.Position
+        ).Magnitude
+
+    local duration =
+        math.clamp(
+            distance
+                / waypointTweenSpeed,
+            0.25,
+            12
+        )
+
+    local startedAt =
+        tick()
+
+    while overlayState.active
+        and root.Parent
+        and travelToken
+            == waypointTravelToken do
+
+        local alpha =
+            math.clamp(
+                (
+                    tick()
+                    - startedAt
+                )
+                / duration,
+                0,
+                1
+            )
+
+        pcall(function()
+
+            root.CFrame =
+                startCFrame:Lerp(
+                    targetCFrame,
+                    alpha
+                )
+
+            root.AssemblyLinearVelocity =
+                Vector3.zero
+
+            root.AssemblyAngularVelocity =
+                Vector3.zero
+
+        end)
+
+        if alpha >= 1 then
+            break
+        end
+
+        task.wait()
+    end
+
+    if travelToken
+        == waypointTravelToken then
+
+        waypointTravelActive = false
+
+    end
+
+    return true
+end
+
+--==================================================
+-- AUTO FARM STATE
+--==================================================
+
+local function setAutoFarm(value)
+
+    autoFarm =
+        value == true
+
+    if not autoFarm then
+
+        autoFarmActionBusy =
+            false
+
+        releaseAutoFarmAirHold()
+
+        notify(
+            AUTO_FARM_TAB_NAME,
+            "Auto Farm disabled",
+            3,
+            10
+        )
+
+    else
+
+        notify(
+            AUTO_FARM_TAB_NAME,
+            "Auto Farm enabled",
+            3,
+            10
+        )
+    end
+end
+
+--==================================================
+-- FIND BEST TARGET
+--==================================================
+
+local function findBestAutoFarmTarget()
+
+    local container =
+        Workspace:FindFirstChild(
+            "RenderedEggs"
+        )
+
+    if not container then
+        return nil
+    end
+
+    local bestEgg = nil
+    local bestChance = -1
+
+    local children =
+        container:GetChildren()
+
+    for i = 1, #children do
+
+        local obj =
+            children[i]
+
+        if obj:IsA("Model") then
+
+            local egg =
+                getCachedNode(obj)
+
+            if egg
+                and isEligibleAutoFarmTarget(
+                    egg
+                )
+                and egg.chance > bestChance then
+
+                bestChance =
+                    egg.chance
+
+                bestEgg =
+                    egg
+            end
+        end
+    end
+
+    return bestEgg
+end
+
+--==================================================
+-- JUMP TO BEST TARGET
+--==================================================
+
+local function jumpToTopTier()
+
+    local container =
+        Workspace:FindFirstChild(
+            "RenderedEggs"
+        )
+
+    if not container then
+
+        notify(
+            TAB_NAME,
+            "RenderedEggs not found",
+            3,
+            10
+        )
+
+        return
+    end
+
+    local primeTarget = nil
+    local maxChance = -1
+
+    local children =
+        container:GetChildren()
+
+    for i = 1, #children do
+
+        local obj =
+            children[i]
+
+        if obj:IsA("Model") then
+
+            local parsed =
+                getCachedNode(obj)
+
+            if parsed
+                and parsed.chance > maxChance then
+
+                maxChance =
+                    parsed.chance
+
+                primeTarget =
+                    parsed
+            end
+        end
+    end
+
+    if not primeTarget then
+
+        notify(
+            TAB_NAME,
+            "No egg target found",
+            3,
+            10
+        )
+
+        return
+    end
+
+    local avatar =
+        LP.Character
+
+    if not avatar
+        or not primeTarget.core
+        or not primeTarget.core.Parent then
+
+        notify(
+            TAB_NAME,
+            "Target is no longer available",
+            3,
+            10
+        )
+
+        return
+    end
+
+    local pos =
+        primeTarget.core.Position
+
+    local newCF =
+        CFrame.new(
+            pos.X,
+            pos.Y + 2.5,
+            pos.Z
+        )
+
+    local pivoted =
+        pcall(function()
+
+            avatar:PivotTo(
+                newCF
+            )
+
+        end)
+
+    if not pivoted then
+
+        local root =
+            avatar:FindFirstChild(
+                "HumanoidRootPart"
+            )
+            or avatar.PrimaryPart
+
+        if root then
+            root.CFrame = newCF
+        end
+    end
+
+    notify(
+        TAB_NAME,
+        "Jumped to "
+            .. primeTarget.identity
+            .. " | "
+            .. primeTarget.tier
+            .. " | Chance "
+            .. encodeSuffix(
+                primeTarget.chance
+            ),
+        3,
+        10
+    )
+end
+
+--==================================================
+-- DRAWING
+--==================================================
+
+for i = 1, MAX_NODES do
+
+    local txt =
+        Drawing.new(
+            "Text"
+        )
+
+    txt.Size = 14
+    txt.Center = true
+    txt.Outline = true
+    txt.Font = 2
+    txt.Visible = false
+
+    labelCache[i] =
+        txt
+end
+
+--==================================================
+-- REMOVE OLD TABS
+--==================================================
+
+pcall(function()
+    UI.RemoveTab(
+        TAB_NAME
+    )
+end)
+
+pcall(function()
+    UI.RemoveTab(
+        AUTO_FARM_TAB_NAME
+    )
+end)
+
+--==================================================
+-- MAIN TAB
+--==================================================
+
+UI.AddTab(
+    TAB_NAME,
+    function(tab)
+
+        local moveGroup =
+            tab:Section(
+                "Action Controls",
+                "Left"
+            )
+
+        moveGroup:Button(
+            "Shift Underground",
+            submergeCharacter
+        )
+
+        moveGroup:Button(
+            "Assign Submerge Key",
+            function()
+
+                awaitDiveKey = true
+                awaitTopTargetKey = false
+                awaitAutoFarmKey = false
+
+                notify(
+                    TAB_NAME,
+                    "Press any key to map Shift Underground",
+                    3,
+                    10
+                )
+            end
+        )
+
+        moveGroup:SliderInt(
+            UI_PREFIX .. "depth_slider",
+            "Submerge Depth",
+            10,
+            250,
+            60,
+            function(value)
+
+                movementConfig.submergeDepth =
+                    value
+            end
+        )
+
+        moveGroup:Spacing()
+
+        moveGroup:Button(
+            "Jump to Best Target",
+            jumpToTopTier
+        )
+
+        moveGroup:Button(
+            "Assign Jump Key",
+            function()
+
+                awaitTopTargetKey = true
+                awaitDiveKey = false
+                awaitAutoFarmKey = false
+
+                notify(
+                    TAB_NAME,
+                    "Press any key to map Jump to Best",
+                    3,
+                    10
+                )
+            end
+        )
+
+        local visGroup =
+            tab:Section(
+                "Tracking Settings",
+                "Right"
+            )
+
+        visGroup:Toggle(
+            UI_PREFIX .. "master_switch",
+            "Display Overlays",
+            true,
+            function(value)
+
+                overlayState.showVisuals =
+                    value == true
+            end
+        )
+
+        visGroup:Combo(
+            UI_PREFIX .. "tier_req",
+            "Minimum Tier",
+            tierOrder,
+            0,
+            function(index)
+
+                overlayState.tierIndex =
+                    math.floor(
+                        tonumber(index)
+                        or 0
+                    ) + 1
+            end
+        )
+
+        -- IMPORTANT:
+        -- This combo only modifies
+        -- trackingChanceIndex.
+        visGroup:Combo(
+            UI_PREFIX .. "tracking_chance_req",
+            "Minimum Chance",
+            chanceLabels,
+            0,
+            function(index)
+
+                setTrackingMinimumChance(
+                    index
+                )
+            end
+        )
+
+        visGroup:SliderInt(
+            UI_PREFIX .. "dist_limit",
+            "Maximum Range",
+            100,
+            200000,
+            200000,
+            function(value)
+
+                overlayState.renderDistance =
+                    tonumber(value)
+                    or 200000
+            end
+        )
+
+        visGroup:Spacing()
+
+        visGroup:Toggle(
+            UI_PREFIX .. "render_id",
+            "Render Identity",
+            true,
+            function(value)
+
+                overlayState.displayName =
+                    value == true
+            end
+        )
+
+        visGroup:Toggle(
+            UI_PREFIX .. "render_tier",
+            "Render Tier",
+            true,
+            function(value)
+
+                overlayState.displayTier =
+                    value == true
+            end
+        )
+
+        visGroup:Toggle(
+            UI_PREFIX .. "render_chance",
+            "Render Chance",
+            true,
+            function(value)
+
+                overlayState.displayChance =
+                    value == true
+            end
+        )
+    end
+)
+
+--==================================================
+-- AUTO FARM TAB
+--==================================================
+
+UI.AddTab(
+    AUTO_FARM_TAB_NAME,
+    function(tab)
+
+        local farmGroup =
+            tab:Section(
+                "Auto Farm Controls",
+                "Left"
+            )
+
+        farmGroup:Toggle(
+            UI_PREFIX .. "auto_farm",
+            "Auto Farm",
+            false,
+            function(value)
+
+                setAutoFarm(
+                    value
+                )
+            end
+        )
+
+        -- IMPORTANT:
+        -- This combo only modifies
+        -- autoFarmChanceIndex / autoFarmMinChance.
+        farmGroup:Combo(
+            UI_PREFIX .. "auto_farm_min_chance",
+            "Minimum Egg Chance",
+            chanceLabels,
+            0,
+            function(index)
+
+                setAutoFarmMinimumChance(
+                    index
+                )
+            end
+        )
+
+        farmGroup:Button(
+            "Set Plot Waypoint Here",
+            setPlotWaypoint
+        )
+
+        farmGroup:Button(
+            "Go to Plot Waypoint",
+            function()
+
+                setAutoFarm(
+                    false
+                )
+
+                if not plotWaypointPosition then
+
+                    notify(
+                        AUTO_FARM_TAB_NAME,
+                        "Set a plot waypoint first",
+                        3,
+                        10
+                    )
+
+                    return
+                end
+
+                task.spawn(
+                    function()
+
+                        if not tweenToPlotWaypoint() then
+
+                            notify(
+                                AUTO_FARM_TAB_NAME,
+                                "Could not start waypoint movement",
+                                3,
+                                10
+                            )
+
+                        else
+
+                            notify(
+                                AUTO_FARM_TAB_NAME,
+                                "Returned to plot waypoint",
+                                3,
+                                10
+                            )
+                        end
+                    end
+                )
+            end
+        )
+
+        farmGroup:Button(
+            "Assign Auto Farm Key",
+            function()
+
+                awaitAutoFarmKey = true
+                awaitDiveKey = false
+                awaitTopTargetKey = false
+
+                notify(
+                    AUTO_FARM_TAB_NAME,
+                    "Press any key to toggle Auto Farm",
+                    3,
+                    10
+                )
+            end
+        )
+    end
+)
+
+--==================================================
+-- KEY INPUT
+--==================================================
+
+inputBlock =
+    UIS.InputBegan:Connect(
+        function(
+            input,
+            gameProcessed
+        )
+
+            local keyCode =
+                input.KeyCode
+
+            local isEnumKey =
+                typeof(keyCode)
+                == "EnumItem"
+
+            local isNumericKey =
+                type(keyCode)
+                == "number"
+
+            if not isEnumKey
+                and not isNumericKey then
+
+                return
+            end
+
+            if (
+                isEnumKey
+                and keyCode
+                    == Enum.KeyCode.Unknown
+            )
+            or (
+                isNumericKey
+                and keyCode == 0
+            ) then
+
+                return
+            end
+
+            local keyName =
+                isEnumKey
+                and keyCode.Name
+                or tostring(
+                    keyCode
+                )
+
+            if awaitDiveKey then
+
+                diveKey =
+                    keyCode
+
+                awaitDiveKey = false
+
+                notify(
+                    TAB_NAME,
+                    "Submerge Key mapped to: "
+                        .. keyName,
+                    3,
+                    10
+                )
+
+                return
+            end
+
+            if awaitTopTargetKey then
+
+                topTargetKey =
+                    keyCode
+
+                awaitTopTargetKey = false
+
+                notify(
+                    TAB_NAME,
+                    "Jump Key mapped to: "
+                        .. keyName,
+                    3,
+                    10
+                )
+
+                return
+            end
+
+            if awaitAutoFarmKey then
+
+                autoFarmKey =
+                    keyCode
+
+                awaitAutoFarmKey = false
+
+                notify(
+                    AUTO_FARM_TAB_NAME,
+                    "Auto Farm key mapped to: "
+                        .. keyName,
+                    3,
+                    10
+                )
+
+                return
+            end
+
+            if gameProcessed then
+                return
+            end
+
+            if diveKey
+                and keyCode == diveKey then
+
+                submergeCharacter()
+            end
+
+            if topTargetKey
+                and keyCode == topTargetKey then
+
+                jumpToTopTier()
+            end
+
+            if autoFarmKey
+                and keyCode == autoFarmKey then
+
+                setAutoFarm(
+                    not autoFarm
+                )
+            end
+        end
+    )
+
+--==================================================
+-- TRACKING SCAN LOOP
+--==================================================
+
+task.spawn(
+    function()
+
+        while overlayState.active do
+
+            local incoming = {}
+            local incomingCount = 0
+
+            local env =
+                Workspace:FindFirstChild(
+                    "RenderedEggs"
+                )
+
+            if env then
+
+                local children =
+                    env:GetChildren()
+
+                for i = 1, #children do
+
+                    if incomingCount >= MAX_NODES then
+                        break
+                    end
+
+                    local obj =
+                        children[i]
+
+                    if obj:IsA("Model") then
+
+                        local parsed =
+                            getCachedNode(
+                                obj
+                            )
+
+                        if parsed then
+
+                            incomingCount =
+                                incomingCount + 1
+
+                            incoming[
+                                incomingCount
+                            ] = parsed
+                        end
+                    end
+                end
+            end
+
+            activeNodes =
+                incoming
+
+            activeNodeCount =
+                incomingCount
+
+            cleanNodeCache()
+
+            task.wait(
+                REFRESH_RATE
+            )
+        end
+    end
+)
+
+--==================================================
+-- ESP RENDER LOOP
+--==================================================
+
+local espAccumulator = 0
+
+renderTick =
+    RunService.RenderStepped:Connect(
+        function(deltaTime)
+
+            espAccumulator =
+                espAccumulator
+                + deltaTime
+
+            if espAccumulator
+                < ESP_REFRESH_RATE then
+
+                return
+            end
+
+            espAccumulator = 0
+
+            if not overlayState.showVisuals then
+
+                for i = 1, MAX_NODES do
+
+                    if labelCache[i].Visible then
+                        labelCache[i].Visible = false
+                    end
+                end
+
+                return
+            end
+
+            local cam =
+                Workspace.CurrentCamera
+
+            if not cam then
+
+                for i = 1, MAX_NODES do
+                    labelCache[i].Visible = false
+                end
+
+                return
+            end
+
+            local cameraPosition =
+                cam.CFrame.Position
+
+            local maxDistance =
+                overlayState.renderDistance
+
+            local maxDistanceSquared =
+                maxDistance
+                * maxDistance
+
+            local activeDraws = 0
+
+            for i = 1, activeNodeCount do
+
+                local node =
+                    activeNodes[i]
+
+                if node
+                    and node.core
+                    and node.core.Parent
+                    and validateNode(node) then
+
+                    local corePosition =
+                        node.core.Position
+
+                    local dx =
+                        corePosition.X
+                        - cameraPosition.X
+
+                    local dy =
+                        corePosition.Y
+                        - cameraPosition.Y
+
+                    local dz =
+                        corePosition.Z
+                        - cameraPosition.Z
+
+                    local distanceSquared =
+                        dx * dx
+                        + dy * dy
+                        + dz * dz
+
+                    if distanceSquared
+                        <= maxDistanceSquared then
+
+                        local screenPosition
+                        local onScreen
+
+                        local targetPosition =
+                            corePosition
+                            + Vector3.new(
+                                0,
+                                2.8,
+                                0
+                            )
+
+                        if type(
+                            WorldToScreen
+                        ) == "function" then
+
+                            screenPosition,
+                                onScreen =
+                                WorldToScreen(
+                                    targetPosition
+                                )
+
+                        else
+
+                            local viewportPosition
+
+                            viewportPosition,
+                                onScreen =
+                                cam:WorldToViewportPoint(
+                                    targetPosition
+                                )
+
+                            screenPosition =
+                                Vector2.new(
+                                    viewportPosition.X,
+                                    viewportPosition.Y
+                                )
+                        end
+
+                        if onScreen
+                            and activeDraws
+                                < MAX_NODES then
+
+                            activeDraws =
+                                activeDraws + 1
+
+                            local txtObj =
+                                labelCache[
+                                    activeDraws
+                                ]
+
+                            local fragments = {}
+
+                            if overlayState.displayName then
+                                fragments[#fragments + 1] =
+                                    node.identity
+                            end
+
+                            if overlayState.displayTier then
+                                fragments[#fragments + 1] =
+                                    node.tier
+                            end
+
+                            if overlayState.displayChance then
+                                fragments[#fragments + 1] =
+                                    "Chance "
+                                    .. encodeSuffix(
+                                        node.chance
+                                    )
+                            end
+
+                            local newText =
+                                table.concat(
+                                    fragments,
+                                    " | "
+                                )
+
+                            if txtObj.Text
+                                ~= newText then
+
+                                txtObj.Text =
+                                    newText
+                            end
+
+                            if txtObj.Position
+                                ~= screenPosition then
+
+                                txtObj.Position =
+                                    screenPosition
+                            end
+
+                            if txtObj.Color
+                                ~= node.color then
+
+                                txtObj.Color =
+                                    node.color
+                            end
+
+                            if not txtObj.Visible then
+                                txtObj.Visible = true
+                            end
+                        end
+                    end
+                end
+            end
+
+            for i =
+                activeDraws + 1,
+                MAX_NODES do
+
+                if labelCache[i].Visible then
+                    labelCache[i].Visible = false
+                end
+            end
+        end
+    )
+
+--==================================================
+-- UNLOAD
+--==================================================
+
+_G.RidePetOverlay_Unload =
+    function()
+
+        overlayState.active =
+            false
+
+        autoFarm =
+            false
+
+        autoFarmActionBusy =
+            false
+
+        releaseAutoFarmAirHold()
+
+        waypointTravelToken =
+            waypointTravelToken + 1
+
+        if inputBlock then
+
+            inputBlock:Disconnect()
+            inputBlock = nil
+
+        end
+
+        if glideConn then
+
+            glideConn:Disconnect()
+            glideConn = nil
+
+        end
+
+        restoreMovementState()
+
+        if renderTick then
+
+            renderTick:Disconnect()
+            renderTick = nil
+
+        end
+
+        for i = 1, MAX_NODES do
+
+            if labelCache[i] then
+
+                pcall(function()
+                    labelCache[i]:Remove()
+                end)
+
+            end
+        end
+
+        table.clear(
+            nodeCache
+        )
+
+        table.clear(
+            activeNodes
+        )
+
+        activeNodeCount = 0
+
+        pcall(function()
+            UI.RemoveTab(
+                TAB_NAME
+            )
+        end)
+
+        pcall(function()
+            UI.RemoveTab(
+                AUTO_FARM_TAB_NAME
+            )
+        end)
+
+        _G.RidePetOverlay_Unload =
+            nil
+    end
+
+--==================================================
+-- AUTO FARM LOOP
+--==================================================
+
+task.spawn(
+    function()
+
+        local nextScan = 0
+        local cachedBestEgg = nil
+
+        while overlayState.active do
+
+            if not autoFarm then
+
+                cachedBestEgg = nil
+                nextScan = 0
+
+                releaseAutoFarmAirHold()
+
+                task.wait(0.25)
+
+            else
+
+                local now =
+                    tick()
+
+                if not autoFarmActionBusy
+                    and now >= nextScan then
+
+                    cachedBestEgg =
+                        findBestAutoFarmTarget()
+
+                    nextScan =
+                        now
+                        + AUTO_FARM_SCAN_RATE
+                end
+
+                local character =
+                    LP.Character
+
+                local root =
+                    character
+                    and character:FindFirstChild(
+                        "HumanoidRootPart"
+                    )
+
+                local bestEgg =
+                    cachedBestEgg
+
+                if root
+                    and bestEgg
+                    and bestEgg.core
+                    and bestEgg.core.Parent
+                    and not autoFarmActionBusy then
+
+                    autoFarmActionBusy =
+                        true
+
+                    local liveEgg =
+                        getCachedNode(
+                            bestEgg.object
+                        )
+
+                    if liveEgg
+                        and isEligibleAutoFarmTarget(
+                            liveEgg
+                        )
+                        and liveEgg.core
+                        and liveEgg.core.Parent then
+
+                        bestEgg =
+                            liveEgg
+
+                        local eggPos =
+                            bestEgg.core.Position
+
+                        -- FIRST TELEPORT
+                        root.CFrame =
+                            CFrame.new(
+                                eggPos.X,
+                                eggPos.Y + 4,
+                                eggPos.Z
+                            )
+
+                        setAutoFarmAirHold(true)
+
+                        task.spawn(
+                            function()
+
+                                task.wait(
+                                    autoFarmSecondTeleportDelay
+                                )
+
+                                if not autoFarm
+                                    or not overlayState.active then
+
+                                    releaseAutoFarmAirHold()
+
+                                    autoFarmActionBusy =
+                                        false
+
+                                    return
+                                end
+
+                                local currentCharacter =
+                                    LP.Character
+
+                                local currentRoot =
+                                    currentCharacter
+                                    and currentCharacter:FindFirstChild(
+                                        "HumanoidRootPart"
+                                    )
+
+                                local currentEgg =
+                                    bestEgg.object
+                                    and getCachedNode(
+                                        bestEgg.object
+                                    )
+
+                                if currentRoot
+                                    and currentEgg
+                                    and currentEgg.core
+                                    and currentEgg.core.Parent then
+
+                                    local secondEggPos =
+                                        currentEgg.core.Position
+
+                                    -- SECOND TELEPORT
+                                    currentRoot.CFrame =
+                                        CFrame.new(
+                                            secondEggPos.X,
+                                            secondEggPos.Y + 4,
+                                            secondEggPos.Z
+                                        )
+
+                                    setAutoFarmAirHold(true)
+
+                                    task.wait(
+                                        autoFarmPickupDelay
+                                    )
+
+                                    if autoFarm
+                                        and overlayState.active then
+
+                                        local pickupStarted =
+                                            triggerEggPickup(
+                                                currentEgg
+                                            )
+
+                                        if pickupStarted then
+
+                                            task.wait(
+                                                autoFarmPostPickupDelay
+                                            )
+
+                                            if autoFarm
+                                                and overlayState.active then
+
+                                                releaseAutoFarmAirHold()
+
+                                                local returnedToPlot =
+                                                    tweenToPlotWaypoint()
+
+                                                if not returnedToPlot then
+
+                                                    setAutoFarm(
+                                                        false
+                                                    )
+
+                                                    notify(
+                                                        AUTO_FARM_TAB_NAME,
+                                                        "Auto Farm stopped: set a plot waypoint first",
+                                                        3,
+                                                        10
+                                                    )
+
+                                                else
+
+                                                    notify(
+                                                        AUTO_FARM_TAB_NAME,
+                                                        "Egg picked up - returning to waypoint",
+                                                        2,
+                                                        10
+                                                    )
+                                                end
+
+                                            else
+
+                                                releaseAutoFarmAirHold()
+
+                                            end
+
+                                        else
+
+                                            releaseAutoFarmAirHold()
+
+                                            notify(
+                                                AUTO_FARM_TAB_NAME,
+                                                "Could not simulate E",
+                                                2,
+                                                10
+                                            )
+
+                                            task.wait(
+                                                0.25
+                                            )
+                                        end
+
+                                    else
+
+                                        releaseAutoFarmAirHold()
+
+                                    end
+
+                                else
+
+                                    releaseAutoFarmAirHold()
+
+                                end
+
+                                autoFarmActionBusy =
+                                    false
+                            end
+                        )
+
+                    else
+
+                        releaseAutoFarmAirHold()
+
+                        autoFarmActionBusy =
+                            false
+
+                        cachedBestEgg =
+                            nil
+                    end
+                end
+
+                task.wait(0.05)
+            end
+        end
+
+        releaseAutoFarmAirHold()
+
+    end
+)
+
+--==================================================
+-- READY
+--==================================================
+
+notify(
+    TAB_NAME,
+    "Ride a Pet loaded - Independent chance filters / Air hold enabled",
+    3,
+    10
+)
