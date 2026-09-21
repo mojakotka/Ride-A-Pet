@@ -14,7 +14,6 @@ end
 
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
 local UIS = game:GetService("UserInputService")
 local Players = game:GetService("Players")
 local StarterGui = game:GetService("StarterGui")
@@ -38,7 +37,6 @@ local AUTO_FARM_SCAN_RATE = 0.35
 -- Pickup verification
 local AUTO_FARM_PICKUP_CHECK_TIME = 3
 local AUTO_FARM_PICKUP_CHECK_INTERVAL = 0.15
-local AUTO_FARM_MAX_PICKUP_ATTEMPTS = 2
 
 --==================================================
 -- TIERS
@@ -768,8 +766,6 @@ end
 
 --==================================================
 -- TRACKING FILTER
---
--- Uses ONLY overlayState.trackingChanceIndex
 --==================================================
 
 local function validateNode(data)
@@ -811,8 +807,6 @@ end
 
 --==================================================
 -- AUTO FARM FILTER
---
--- Uses ONLY autoFarmMinChance
 --==================================================
 
 local function isEligibleAutoFarmTarget(data)
@@ -1181,24 +1175,27 @@ local function triggerEggPickup(egg)
 end
 
 --==================================================
--- CHECK IF TARGET EGG WAS PICKED UP
+-- CHECK EXACT TARGET EGG
 --==================================================
 --
 -- IMPORTANT:
 --
--- This checks the EXACT egg object that Auto Farm
--- originally targeted.
+-- This function DOES NOT call extractNodeData().
+-- This is the main crash/performance fix.
 --
--- It does NOT use the tracking chance filter.
--- It does NOT use the tracking tier filter.
--- It does NOT require ESP to be visible.
+-- It only checks the exact Instance that Auto Farm
+-- originally selected.
 --
 -- The egg is considered picked up when:
 --
--- 1. The original object disappears.
--- 2. The original object is no longer inside
+-- 1. The original Instance no longer has a Parent.
+-- 2. The original Instance is no longer inside
 --    RenderedEggs.
--- 3. The object can no longer be parsed as an egg.
+--
+-- No GetDescendants()
+-- No chance parsing
+-- No ESP filtering
+-- No repeated egg scanning
 --
 --==================================================
 
@@ -1215,68 +1212,57 @@ local function isEggPickedUp(originalEgg)
         return true
     end
 
-    -- Egg instance completely disappeared.
-    if not originalObject.Parent then
+    -- Check exact Instance existence.
+    local parent = nil
+
+    pcall(function()
+        parent = originalObject.Parent
+    end)
+
+    if not parent then
         return true
     end
 
-    local renderedEggs =
-        Workspace:FindFirstChild(
-            "RenderedEggs"
-        )
+    -- Get RenderedEggs.
+    local renderedEggs = nil
 
-    -- If RenderedEggs itself disappeared,
-    -- we cannot verify the egg anymore.
+    pcall(function()
+
+        renderedEggs =
+            Workspace:FindFirstChild(
+                "RenderedEggs"
+            )
+
+    end)
+
     if not renderedEggs then
         return false
     end
 
-    -- Check whether the SAME egg is still
-    -- inside the rendered egg container.
-    local insideRenderedEggs =
-        false
+    -- Check ONLY whether the exact object is
+    -- still inside RenderedEggs.
+    local stillInside = false
 
     pcall(function()
 
-        insideRenderedEggs =
+        stillInside =
             originalObject:IsDescendantOf(
                 renderedEggs
             )
 
     end)
 
-    if not insideRenderedEggs then
+    if not stillInside then
         return true
     end
 
-    -- Re-read the SAME object.
-    --
-    -- This intentionally does not use validateNode()
-    -- because tracking settings must not affect Auto Farm.
-    local currentData =
-        extractNodeData(
-            originalObject
-        )
-
-    -- If the exact object can no longer be
-    -- interpreted as an egg, treat it as picked up.
-    if not currentData then
-        return true
-    end
-
-    -- Egg still exists.
+    -- Same object still exists.
     return false
 
 end
 
 --==================================================
--- WAIT FOR PICKUP CONFIRMATION
---==================================================
---
--- Returns:
---   true  = pickup confirmed
---   false = pickup not confirmed
---
+-- WAIT FOR EXACT EGG TO DISAPPEAR
 --==================================================
 
 local function waitForEggPickup(
@@ -1298,6 +1284,7 @@ local function waitForEggPickup(
         ) then
 
             return true
+
         end
 
         task.wait(
@@ -1528,8 +1515,7 @@ local function setPlotWaypoint()
 end
 
 --==================================================
--- WAYPOINT TWEEN
--- SPEED = 50
+-- WAYPOINT
 --==================================================
 
 local function tweenToPlotWaypoint()
@@ -1629,10 +1615,6 @@ local function tweenToPlotWaypoint()
             break
         end
 
-        -- IMPORTANT:
-        -- Do not use RunService.Heartbeat:Wait()
-        -- because this executor exposes Heartbeat
-        -- as a table without :Wait().
         task.wait()
 
     end
@@ -2445,11 +2427,6 @@ renderTick =
                 return
             end
 
-            -- IMPORTANT:
-            -- This executor uses WorldToScreen().
-            -- Do NOT fall back to
-            -- Camera:WorldToViewportPoint().
-
             if type(
                 WorldToScreen
             ) ~= "function" then
@@ -2835,7 +2812,7 @@ task.spawn(
                         true
 
                     --==============================================
-                    -- GET LIVE VERSION OF THE EXACT TARGET
+                    -- GET LIVE VERSION OF SAME TARGET
                     --==============================================
 
                     local liveEgg =
@@ -2867,7 +2844,6 @@ task.spawn(
                                 eggPos.Z
                             )
 
-                        -- Hold the player above this exact egg.
                         setAutoFarmAirHold(true)
 
                         task.spawn(
@@ -2893,7 +2869,7 @@ task.spawn(
                                 end
 
                                 --==================================
-                                -- RE-READ THE SAME EGG
+                                -- CHECK SAME EXACT EGG
                                 --==================================
 
                                 local currentCharacter =
@@ -2905,6 +2881,15 @@ task.spawn(
                                         "HumanoidRootPart"
                                     )
 
+                                -- IMPORTANT:
+                                --
+                                -- We get the live data once here
+                                -- before the pickup attempt.
+                                --
+                                -- After this point, pickup
+                                -- verification DOES NOT parse
+                                -- the egg again.
+                                --
                                 local currentEgg =
                                     bestEgg.object
                                     and getCachedNode(
@@ -2940,179 +2925,38 @@ task.spawn(
                                         and overlayState.active then
 
                                         --==========================
-                                        -- PICKUP ATTEMPTS
+                                        -- PICKUP
                                         --==========================
+                                        --
+                                        -- ONE E ATTEMPT ONLY.
+                                        --
+                                        -- The old code retried E and
+                                        -- repeatedly parsed the egg.
+                                        -- That has been removed.
+                                        --==========================
+
+                                        local pickupStarted =
+                                            triggerEggPickup(
+                                                currentEgg
+                                            )
 
                                         local pickupConfirmed =
                                             false
 
-                                        for attempt = 1,
-                                            AUTO_FARM_MAX_PICKUP_ATTEMPTS do
-
-                                            if not autoFarm
-                                                or not overlayState.active then
-
-                                                break
-                                            end
-
-                                            -- Make sure we are still
-                                            -- above the SAME egg.
-                                            local verifyRoot =
-                                                getCachedNode(
-                                                    currentEgg.object
-                                                )
-
-                                            if not verifyRoot then
-
-                                                -- Egg already disappeared.
-                                                -- That means it was picked up.
-                                                pickupConfirmed =
-                                                    true
-
-                                                break
-                                            end
-
-                                            local verifyCore =
-                                                verifyRoot.core
-
-                                            if verifyCore
-                                                and verifyCore.Parent then
-
-                                                local verifyPosition =
-                                                    verifyCore.Position
-
-                                                local latestCharacter =
-                                                    LP.Character
-
-                                                local latestRoot =
-                                                    latestCharacter
-                                                    and latestCharacter:FindFirstChild(
-                                                        "HumanoidRootPart"
-                                                    )
-
-                                                if latestRoot then
-
-                                                    latestRoot.CFrame =
-                                                        CFrame.new(
-                                                            verifyPosition.X,
-                                                            verifyPosition.Y + 4,
-                                                            verifyPosition.Z
-                                                        )
-
-                                                    setAutoFarmAirHold(true)
-
-                                                end
-
-                                            end
-
-                                            --======================
-                                            -- HOLD E FOR 2 SEC
-                                            --======================
-
-                                            local pickupStarted =
-                                                triggerEggPickup(
-                                                    currentEgg
-                                                )
-
-                                            if not pickupStarted then
-
-                                                notify(
-                                                    AUTO_FARM_TAB_NAME,
-                                                    "Could not simulate E",
-                                                    2,
-                                                    10
-                                                )
-
-                                                break
-
-                                            end
-
-                                            --======================
-                                            -- CHECK THE SAME EGG
-                                            --======================
+                                        if pickupStarted then
 
                                             pickupConfirmed =
                                                 waitForEggPickup(
                                                     currentEgg
                                                 )
 
-                                            if pickupConfirmed then
-
-                                                break
-
-                                            end
-
-                                            --======================
-                                            -- PICKUP NOT CONFIRMED
-                                            --======================
-
-                                            if attempt
-                                                < AUTO_FARM_MAX_PICKUP_ATTEMPTS then
-
-                                                notify(
-                                                    AUTO_FARM_TAB_NAME,
-                                                    "Pickup not confirmed - retrying E",
-                                                    1.5,
-                                                    10
-                                                )
-
-                                                -- Keep holding the player
-                                                -- above the egg before retry.
-                                                local retryEgg =
-                                                    getCachedNode(
-                                                        currentEgg.object
-                                                    )
-
-                                                if retryEgg
-                                                    and retryEgg.core
-                                                    and retryEgg.core.Parent then
-
-                                                    local retryPos =
-                                                        retryEgg.core.Position
-
-                                                    local retryCharacter =
-                                                        LP.Character
-
-                                                    local retryRoot =
-                                                        retryCharacter
-                                                        and retryCharacter:FindFirstChild(
-                                                            "HumanoidRootPart"
-                                                        )
-
-                                                    if retryRoot then
-
-                                                        retryRoot.CFrame =
-                                                            CFrame.new(
-                                                                retryPos.X,
-                                                                retryPos.Y + 4,
-                                                                retryPos.Z
-                                                            )
-
-                                                        setAutoFarmAirHold(
-                                                            true
-                                                        )
-
-                                                    end
-
-                                                end
-
-                                                task.wait(
-                                                    0.2
-                                                )
-
-                                            end
-
                                         end
 
-                                        --==================================
+                                        --==============================
                                         -- PICKUP RESULT
-                                        --==================================
+                                        --==============================
 
                                         if pickupConfirmed then
-
-                                            --==============================
-                                            -- PICKUP CONFIRMED
-                                            --==============================
 
                                             releaseAutoFarmAirHold()
 
@@ -3175,28 +3019,22 @@ task.spawn(
 
                                         else
 
-                                            --==============================
-                                            -- PICKUP NOT CONFIRMED
-                                            --==============================
+                                            --==========================
+                                            -- NOT CONFIRMED
+                                            --==========================
                                             --
-                                            -- IMPORTANT:
-                                            -- Do NOT return to plot.
+                                            -- Do not retry E.
+                                            -- Do not return to plot.
                                             --
-                                            -- The next scan will look for
-                                            -- another eligible egg.
-                                            --==============================
+                                            -- Release the hold and let
+                                            -- the normal scanner find the
+                                            -- next target.
+                                            --==========================
 
                                             releaseAutoFarmAirHold()
 
                                             cachedBestEgg =
                                                 nil
-
-                                            notify(
-                                                AUTO_FARM_TAB_NAME,
-                                                "Egg pickup not confirmed - scanning again",
-                                                2,
-                                                10
-                                            )
 
                                         end
 
@@ -3209,6 +3047,9 @@ task.spawn(
                                 else
 
                                     releaseAutoFarmAirHold()
+
+                                    cachedBestEgg =
+                                        nil
 
                                 end
 
