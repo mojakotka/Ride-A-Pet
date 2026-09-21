@@ -35,6 +35,11 @@ local REFRESH_RATE = 0.75
 local ESP_REFRESH_RATE = 1 / 30
 local AUTO_FARM_SCAN_RATE = 0.35
 
+-- Pickup verification
+local AUTO_FARM_PICKUP_CHECK_TIME = 3
+local AUTO_FARM_PICKUP_CHECK_INTERVAL = 0.15
+local AUTO_FARM_MAX_PICKUP_ATTEMPTS = 2
+
 --==================================================
 -- TIERS
 --==================================================
@@ -92,32 +97,52 @@ local chanceTiers = {
 
 local function encodeSuffix(value)
 
+    value =
+        tonumber(value)
+        or 0
+
     if value >= 1e12 then
-        return string.format("%.1fT", value / 1e12)
+        return string.format(
+            "%.1fT",
+            value / 1e12
+        )
     end
 
     if value >= 1e9 then
-        return string.format("%.1fB", value / 1e9)
+        return string.format(
+            "%.1fB",
+            value / 1e9
+        )
     end
 
     if value >= 1e6 then
-        return string.format("%.1fM", value / 1e6)
+        return string.format(
+            "%.1fM",
+            value / 1e6
+        )
     end
 
     if value >= 1e3 then
-        return string.format("%.1fK", value / 1e3)
+        return string.format(
+            "%.1fK",
+            value / 1e3
+        )
     end
 
-    return tostring(math.floor(value))
+    return tostring(
+        math.floor(value)
+    )
 end
 
 local chanceLabels = {}
 
 for i = 1, #chanceTiers do
+
     chanceLabels[i] =
         encodeSuffix(
             chanceTiers[i]
         )
+
 end
 
 --==================================================
@@ -131,8 +156,7 @@ local overlayState = {
 
     tierIndex = 1,
 
-    -- IMPORTANT:
-    -- Tracking gets its own chance index.
+    -- Tracking has its own chance index.
     trackingChanceIndex = 1,
 
     renderDistance = 200000,
@@ -143,6 +167,7 @@ local overlayState = {
 }
 
 local movementConfig = {
+
     submergeDepth = 60,
     glideSpeed = 120,
     ghostTime = 5,
@@ -155,11 +180,11 @@ local movementConfig = {
 local autoFarm = false
 local autoFarmActionBusy = false
 
--- IMPORTANT:
--- Auto Farm gets its own completely separate
--- chance index and chance value.
+-- Completely independent from tracking.
 local autoFarmChanceIndex = 1
-local autoFarmMinChance = chanceTiers[1] or 0
+local autoFarmMinChance =
+    chanceTiers[1]
+    or 0
 
 local autoFarmSecondTeleportDelay = 0.35
 local autoFarmPickupDelay = 0.45
@@ -269,6 +294,7 @@ local function setAutoFarmAirHold(value)
                         Vector3.zero
 
                 end)
+
             end
         )
 end
@@ -542,7 +568,10 @@ end
 -- FIND CHANCE TEXT
 --==================================================
 
-local function findChanceText(node, core)
+local function findChanceText(
+    node,
+    core
+)
 
     local ui =
         core
@@ -644,14 +673,21 @@ local function extractNodeData(node)
         )
 
     return {
+
         object = node,
+
         core = core,
+
         identity = node.Name,
+
         chance = chanceVal,
+
         tier = tier,
+
         tierRank =
             tierRank[tier]
             or 0,
+
         color =
             tierColors[tier]
             or Color3.new(
@@ -667,6 +703,10 @@ end
 --==================================================
 
 local function getCachedNode(node)
+
+    if not node then
+        return nil
+    end
 
     local cached =
         nodeCache[node]
@@ -719,8 +759,11 @@ local function cleanNodeCache()
             ) then
 
             nodeCache[object] = nil
+
         end
+
     end
+
 end
 
 --==================================================
@@ -777,12 +820,11 @@ local function isEligibleAutoFarmTarget(data)
     return data
         and data.chance
         >= autoFarmMinChance
+
 end
 
 --==================================================
 -- TRACKING MINIMUM CHANCE
---
--- Completely independent from Auto Farm.
 --==================================================
 
 local function setTrackingMinimumChance(index)
@@ -808,8 +850,6 @@ end
 
 --==================================================
 -- AUTO FARM MINIMUM CHANCE
---
--- Completely independent from Tracking.
 --==================================================
 
 local function setAutoFarmMinimumChance(index)
@@ -887,6 +927,7 @@ local function restoreMovementState()
     end
 
     platformStandHumanoid = nil
+
 end
 
 --==================================================
@@ -918,8 +959,11 @@ local function applyGhosting()
             end
 
             piece.CanCollide = false
+
         end
+
     end
+
 end
 
 --==================================================
@@ -1014,6 +1058,7 @@ local function submergeCharacter()
         pcall(function()
             hum.PlatformStand = true
         end)
+
     end
 
     glideConn =
@@ -1132,6 +1177,139 @@ local function triggerEggPickup(egg)
         end)
 
     return success
+
+end
+
+--==================================================
+-- CHECK IF TARGET EGG WAS PICKED UP
+--==================================================
+--
+-- IMPORTANT:
+--
+-- This checks the EXACT egg object that Auto Farm
+-- originally targeted.
+--
+-- It does NOT use the tracking chance filter.
+-- It does NOT use the tracking tier filter.
+-- It does NOT require ESP to be visible.
+--
+-- The egg is considered picked up when:
+--
+-- 1. The original object disappears.
+-- 2. The original object is no longer inside
+--    RenderedEggs.
+-- 3. The object can no longer be parsed as an egg.
+--
+--==================================================
+
+local function isEggPickedUp(originalEgg)
+
+    if not originalEgg then
+        return true
+    end
+
+    local originalObject =
+        originalEgg.object
+
+    if not originalObject then
+        return true
+    end
+
+    -- Egg instance completely disappeared.
+    if not originalObject.Parent then
+        return true
+    end
+
+    local renderedEggs =
+        Workspace:FindFirstChild(
+            "RenderedEggs"
+        )
+
+    -- If RenderedEggs itself disappeared,
+    -- we cannot verify the egg anymore.
+    if not renderedEggs then
+        return false
+    end
+
+    -- Check whether the SAME egg is still
+    -- inside the rendered egg container.
+    local insideRenderedEggs =
+        false
+
+    pcall(function()
+
+        insideRenderedEggs =
+            originalObject:IsDescendantOf(
+                renderedEggs
+            )
+
+    end)
+
+    if not insideRenderedEggs then
+        return true
+    end
+
+    -- Re-read the SAME object.
+    --
+    -- This intentionally does not use validateNode()
+    -- because tracking settings must not affect Auto Farm.
+    local currentData =
+        extractNodeData(
+            originalObject
+        )
+
+    -- If the exact object can no longer be
+    -- interpreted as an egg, treat it as picked up.
+    if not currentData then
+        return true
+    end
+
+    -- Egg still exists.
+    return false
+
+end
+
+--==================================================
+-- WAIT FOR PICKUP CONFIRMATION
+--==================================================
+--
+-- Returns:
+--   true  = pickup confirmed
+--   false = pickup not confirmed
+--
+--==================================================
+
+local function waitForEggPickup(
+    originalEgg
+)
+
+    local startedAt =
+        tick()
+
+    while autoFarm
+        and overlayState.active
+        and (
+            tick()
+            - startedAt
+        ) < AUTO_FARM_PICKUP_CHECK_TIME do
+
+        if isEggPickedUp(
+            originalEgg
+        ) then
+
+            return true
+        end
+
+        task.wait(
+            AUTO_FARM_PICKUP_CHECK_INTERVAL
+        )
+
+    end
+
+    return isEggPickedUp(
+        originalEgg
+    )
+
 end
 
 --==================================================
@@ -1451,7 +1629,12 @@ local function tweenToPlotWaypoint()
             break
         end
 
+        -- IMPORTANT:
+        -- Do not use RunService.Heartbeat:Wait()
+        -- because this executor exposes Heartbeat
+        -- as a table without :Wait().
         task.wait()
+
     end
 
     if travelToken
@@ -1462,6 +1645,7 @@ local function tweenToPlotWaypoint()
     end
 
     return true
+
 end
 
 --==================================================
@@ -1495,7 +1679,9 @@ local function setAutoFarm(value)
             3,
             10
         )
+
     end
+
 end
 
 --==================================================
@@ -1540,11 +1726,15 @@ local function findBestAutoFarmTarget()
 
                 bestEgg =
                     egg
+
             end
+
         end
+
     end
 
     return bestEgg
+
 end
 
 --==================================================
@@ -1594,8 +1784,11 @@ local function jumpToTopTier()
 
                 primeTarget =
                     parsed
+
             end
+
         end
+
     end
 
     if not primeTarget then
@@ -1672,6 +1865,7 @@ local function jumpToTopTier()
         3,
         10
     )
+
 end
 
 --==================================================
@@ -1693,6 +1887,7 @@ for i = 1, MAX_NODES do
 
     labelCache[i] =
         txt
+
 end
 
 --==================================================
@@ -1700,15 +1895,19 @@ end
 --==================================================
 
 pcall(function()
+
     UI.RemoveTab(
         TAB_NAME
     )
+
 end)
 
 pcall(function()
+
     UI.RemoveTab(
         AUTO_FARM_TAB_NAME
     )
+
 end)
 
 --==================================================
@@ -1744,6 +1943,7 @@ UI.AddTab(
                     3,
                     10
                 )
+
             end
         )
 
@@ -1757,6 +1957,7 @@ UI.AddTab(
 
                 movementConfig.submergeDepth =
                     value
+
             end
         )
 
@@ -1781,6 +1982,7 @@ UI.AddTab(
                     3,
                     10
                 )
+
             end
         )
 
@@ -1798,6 +2000,7 @@ UI.AddTab(
 
                 overlayState.showVisuals =
                     value == true
+
             end
         )
 
@@ -1813,12 +2016,10 @@ UI.AddTab(
                         tonumber(index)
                         or 0
                     ) + 1
+
             end
         )
 
-        -- IMPORTANT:
-        -- This combo only modifies
-        -- trackingChanceIndex.
         visGroup:Combo(
             UI_PREFIX .. "tracking_chance_req",
             "Minimum Chance",
@@ -1829,6 +2030,7 @@ UI.AddTab(
                 setTrackingMinimumChance(
                     index
                 )
+
             end
         )
 
@@ -1843,6 +2045,7 @@ UI.AddTab(
                 overlayState.renderDistance =
                     tonumber(value)
                     or 200000
+
             end
         )
 
@@ -1856,6 +2059,7 @@ UI.AddTab(
 
                 overlayState.displayName =
                     value == true
+
             end
         )
 
@@ -1867,6 +2071,7 @@ UI.AddTab(
 
                 overlayState.displayTier =
                     value == true
+
             end
         )
 
@@ -1878,8 +2083,10 @@ UI.AddTab(
 
                 overlayState.displayChance =
                     value == true
+
             end
         )
+
     end
 )
 
@@ -1906,12 +2113,10 @@ UI.AddTab(
                 setAutoFarm(
                     value
                 )
+
             end
         )
 
-        -- IMPORTANT:
-        -- This combo only modifies
-        -- autoFarmChanceIndex / autoFarmMinChance.
         farmGroup:Combo(
             UI_PREFIX .. "auto_farm_min_chance",
             "Minimum Egg Chance",
@@ -1922,6 +2127,7 @@ UI.AddTab(
                 setAutoFarmMinimumChance(
                     index
                 )
+
             end
         )
 
@@ -1970,9 +2176,12 @@ UI.AddTab(
                                 3,
                                 10
                             )
+
                         end
+
                     end
                 )
+
             end
         )
 
@@ -1990,8 +2199,10 @@ UI.AddTab(
                     3,
                     10
                 )
+
             end
         )
+
     end
 )
 
@@ -2105,12 +2316,14 @@ inputBlock =
                 and keyCode == diveKey then
 
                 submergeCharacter()
+
             end
 
             if topTargetKey
                 and keyCode == topTargetKey then
 
                 jumpToTopTier()
+
             end
 
             if autoFarmKey
@@ -2119,7 +2332,9 @@ inputBlock =
                 setAutoFarm(
                     not autoFarm
                 )
+
             end
+
         end
     )
 
@@ -2169,9 +2384,13 @@ task.spawn(
                             incoming[
                                 incomingCount
                             ] = parsed
+
                         end
+
                     end
+
                 end
+
             end
 
             activeNodes =
@@ -2185,7 +2404,9 @@ task.spawn(
             task.wait(
                 REFRESH_RATE
             )
+
         end
+
     end
 )
 
@@ -2218,6 +2439,23 @@ renderTick =
                     if labelCache[i].Visible then
                         labelCache[i].Visible = false
                     end
+
+                end
+
+                return
+            end
+
+            -- IMPORTANT:
+            -- This executor uses WorldToScreen().
+            -- Do NOT fall back to
+            -- Camera:WorldToViewportPoint().
+
+            if type(
+                WorldToScreen
+            ) ~= "function" then
+
+                for i = 1, MAX_NODES do
+                    labelCache[i].Visible = false
                 end
 
                 return
@@ -2280,8 +2518,8 @@ renderTick =
                     if distanceSquared
                         <= maxDistanceSquared then
 
-                        local screenPosition
-                        local onScreen
+                        local screenPosition = nil
+                        local onScreen = false
 
                         local targetPosition =
                             corePosition
@@ -2291,34 +2529,63 @@ renderTick =
                                 0
                             )
 
-                        if type(
-                            WorldToScreen
-                        ) == "function" then
+                        pcall(function()
 
-                            screenPosition,
-                                onScreen =
+                            local a, b, c =
                                 WorldToScreen(
                                     targetPosition
                                 )
 
-                        else
+                            if typeof(a)
+                                == "Vector2" then
 
-                            local viewportPosition
+                                screenPosition =
+                                    a
 
-                            viewportPosition,
                                 onScreen =
-                                cam:WorldToViewportPoint(
-                                    targetPosition
-                                )
+                                    b ~= false
 
-                            screenPosition =
-                                Vector2.new(
-                                    viewportPosition.X,
-                                    viewportPosition.Y
-                                )
-                        end
+                                return
+                            end
 
-                        if onScreen
+                            if type(a)
+                                == "number"
+                                and type(b)
+                                == "number" then
+
+                                screenPosition =
+                                    Vector2.new(
+                                        a,
+                                        b
+                                    )
+
+                                onScreen =
+                                    c ~= false
+
+                                return
+                            end
+
+                            if type(a)
+                                == "table"
+                                and a.X
+                                and a.Y then
+
+                                screenPosition =
+                                    Vector2.new(
+                                        a.X,
+                                        a.Y
+                                    )
+
+                                onScreen =
+                                    a.OnScreen
+                                    ~= false
+
+                            end
+
+                        end)
+
+                        if screenPosition
+                            and onScreen
                             and activeDraws
                                 < MAX_NODES then
 
@@ -2333,21 +2600,33 @@ renderTick =
                             local fragments = {}
 
                             if overlayState.displayName then
-                                fragments[#fragments + 1] =
+
+                                fragments[
+                                    #fragments + 1
+                                ] =
                                     node.identity
+
                             end
 
                             if overlayState.displayTier then
-                                fragments[#fragments + 1] =
+
+                                fragments[
+                                    #fragments + 1
+                                ] =
                                     node.tier
+
                             end
 
                             if overlayState.displayChance then
-                                fragments[#fragments + 1] =
+
+                                fragments[
+                                    #fragments + 1
+                                ] =
                                     "Chance "
                                     .. encodeSuffix(
                                         node.chance
                                     )
+
                             end
 
                             local newText =
@@ -2361,6 +2640,7 @@ renderTick =
 
                                 txtObj.Text =
                                     newText
+
                             end
 
                             if txtObj.Position
@@ -2368,6 +2648,7 @@ renderTick =
 
                                 txtObj.Position =
                                     screenPosition
+
                             end
 
                             if txtObj.Color
@@ -2375,14 +2656,19 @@ renderTick =
 
                                 txtObj.Color =
                                     node.color
+
                             end
 
                             if not txtObj.Visible then
                                 txtObj.Visible = true
                             end
+
                         end
+
                     end
+
                 end
+
             end
 
             for i =
@@ -2392,7 +2678,9 @@ renderTick =
                 if labelCache[i].Visible then
                     labelCache[i].Visible = false
                 end
+
             end
+
         end
     )
 
@@ -2449,6 +2737,7 @@ _G.RidePetOverlay_Unload =
                 end)
 
             end
+
         end
 
         table.clear(
@@ -2462,19 +2751,24 @@ _G.RidePetOverlay_Unload =
         activeNodeCount = 0
 
         pcall(function()
+
             UI.RemoveTab(
                 TAB_NAME
             )
+
         end)
 
         pcall(function()
+
             UI.RemoveTab(
                 AUTO_FARM_TAB_NAME
             )
+
         end)
 
         _G.RidePetOverlay_Unload =
             nil
+
     end
 
 --==================================================
@@ -2503,6 +2797,10 @@ task.spawn(
                 local now =
                     tick()
 
+                --==============================================
+                -- FIND TARGET
+                --==============================================
+
                 if not autoFarmActionBusy
                     and now >= nextScan then
 
@@ -2512,6 +2810,7 @@ task.spawn(
                     nextScan =
                         now
                         + AUTO_FARM_SCAN_RATE
+
                 end
 
                 local character =
@@ -2535,6 +2834,10 @@ task.spawn(
                     autoFarmActionBusy =
                         true
 
+                    --==============================================
+                    -- GET LIVE VERSION OF THE EXACT TARGET
+                    --==============================================
+
                     local liveEgg =
                         getCachedNode(
                             bestEgg.object
@@ -2553,7 +2856,10 @@ task.spawn(
                         local eggPos =
                             bestEgg.core.Position
 
+                        --==========================================
                         -- FIRST TELEPORT
+                        --==========================================
+
                         root.CFrame =
                             CFrame.new(
                                 eggPos.X,
@@ -2561,10 +2867,15 @@ task.spawn(
                                 eggPos.Z
                             )
 
+                        -- Hold the player above this exact egg.
                         setAutoFarmAirHold(true)
 
                         task.spawn(
                             function()
+
+                                --==================================
+                                -- WAIT BEFORE SECOND TELEPORT
+                                --==================================
 
                                 task.wait(
                                     autoFarmSecondTeleportDelay
@@ -2580,6 +2891,10 @@ task.spawn(
 
                                     return
                                 end
+
+                                --==================================
+                                -- RE-READ THE SAME EGG
+                                --==================================
 
                                 local currentCharacter =
                                     LP.Character
@@ -2604,7 +2919,10 @@ task.spawn(
                                     local secondEggPos =
                                         currentEgg.core.Position
 
+                                    --==============================
                                     -- SECOND TELEPORT
+                                    --==============================
+
                                     currentRoot.CFrame =
                                         CFrame.new(
                                             secondEggPos.X,
@@ -2621,12 +2939,182 @@ task.spawn(
                                     if autoFarm
                                         and overlayState.active then
 
-                                        local pickupStarted =
-                                            triggerEggPickup(
-                                                currentEgg
-                                            )
+                                        --==========================
+                                        -- PICKUP ATTEMPTS
+                                        --==========================
 
-                                        if pickupStarted then
+                                        local pickupConfirmed =
+                                            false
+
+                                        for attempt = 1,
+                                            AUTO_FARM_MAX_PICKUP_ATTEMPTS do
+
+                                            if not autoFarm
+                                                or not overlayState.active then
+
+                                                break
+                                            end
+
+                                            -- Make sure we are still
+                                            -- above the SAME egg.
+                                            local verifyRoot =
+                                                getCachedNode(
+                                                    currentEgg.object
+                                                )
+
+                                            if not verifyRoot then
+
+                                                -- Egg already disappeared.
+                                                -- That means it was picked up.
+                                                pickupConfirmed =
+                                                    true
+
+                                                break
+                                            end
+
+                                            local verifyCore =
+                                                verifyRoot.core
+
+                                            if verifyCore
+                                                and verifyCore.Parent then
+
+                                                local verifyPosition =
+                                                    verifyCore.Position
+
+                                                local latestCharacter =
+                                                    LP.Character
+
+                                                local latestRoot =
+                                                    latestCharacter
+                                                    and latestCharacter:FindFirstChild(
+                                                        "HumanoidRootPart"
+                                                    )
+
+                                                if latestRoot then
+
+                                                    latestRoot.CFrame =
+                                                        CFrame.new(
+                                                            verifyPosition.X,
+                                                            verifyPosition.Y + 4,
+                                                            verifyPosition.Z
+                                                        )
+
+                                                    setAutoFarmAirHold(true)
+
+                                                end
+
+                                            end
+
+                                            --======================
+                                            -- HOLD E FOR 2 SEC
+                                            --======================
+
+                                            local pickupStarted =
+                                                triggerEggPickup(
+                                                    currentEgg
+                                                )
+
+                                            if not pickupStarted then
+
+                                                notify(
+                                                    AUTO_FARM_TAB_NAME,
+                                                    "Could not simulate E",
+                                                    2,
+                                                    10
+                                                )
+
+                                                break
+
+                                            end
+
+                                            --======================
+                                            -- CHECK THE SAME EGG
+                                            --======================
+
+                                            pickupConfirmed =
+                                                waitForEggPickup(
+                                                    currentEgg
+                                                )
+
+                                            if pickupConfirmed then
+
+                                                break
+
+                                            end
+
+                                            --======================
+                                            -- PICKUP NOT CONFIRMED
+                                            --======================
+
+                                            if attempt
+                                                < AUTO_FARM_MAX_PICKUP_ATTEMPTS then
+
+                                                notify(
+                                                    AUTO_FARM_TAB_NAME,
+                                                    "Pickup not confirmed - retrying E",
+                                                    1.5,
+                                                    10
+                                                )
+
+                                                -- Keep holding the player
+                                                -- above the egg before retry.
+                                                local retryEgg =
+                                                    getCachedNode(
+                                                        currentEgg.object
+                                                    )
+
+                                                if retryEgg
+                                                    and retryEgg.core
+                                                    and retryEgg.core.Parent then
+
+                                                    local retryPos =
+                                                        retryEgg.core.Position
+
+                                                    local retryCharacter =
+                                                        LP.Character
+
+                                                    local retryRoot =
+                                                        retryCharacter
+                                                        and retryCharacter:FindFirstChild(
+                                                            "HumanoidRootPart"
+                                                        )
+
+                                                    if retryRoot then
+
+                                                        retryRoot.CFrame =
+                                                            CFrame.new(
+                                                                retryPos.X,
+                                                                retryPos.Y + 4,
+                                                                retryPos.Z
+                                                            )
+
+                                                        setAutoFarmAirHold(
+                                                            true
+                                                        )
+
+                                                    end
+
+                                                end
+
+                                                task.wait(
+                                                    0.2
+                                                )
+
+                                            end
+
+                                        end
+
+                                        --==================================
+                                        -- PICKUP RESULT
+                                        --==================================
+
+                                        if pickupConfirmed then
+
+                                            --==============================
+                                            -- PICKUP CONFIRMED
+                                            --==============================
+
+                                            releaseAutoFarmAirHold()
 
                                             task.wait(
                                                 autoFarmPostPickupDelay
@@ -2635,12 +3123,36 @@ task.spawn(
                                             if autoFarm
                                                 and overlayState.active then
 
-                                                releaseAutoFarmAirHold()
+                                                if plotWaypointPosition then
 
-                                                local returnedToPlot =
-                                                    tweenToPlotWaypoint()
+                                                    local returnedToPlot =
+                                                        tweenToPlotWaypoint()
 
-                                                if not returnedToPlot then
+                                                    if returnedToPlot then
+
+                                                        notify(
+                                                            AUTO_FARM_TAB_NAME,
+                                                            "Egg picked up - returning to waypoint",
+                                                            2,
+                                                            10
+                                                        )
+
+                                                    else
+
+                                                        setAutoFarm(
+                                                            false
+                                                        )
+
+                                                        notify(
+                                                            AUTO_FARM_TAB_NAME,
+                                                            "Could not return to waypoint",
+                                                            3,
+                                                            10
+                                                        )
+
+                                                    end
+
+                                                else
 
                                                     setAutoFarm(
                                                         false
@@ -2653,14 +3165,6 @@ task.spawn(
                                                         10
                                                     )
 
-                                                else
-
-                                                    notify(
-                                                        AUTO_FARM_TAB_NAME,
-                                                        "Egg picked up - returning to waypoint",
-                                                        2,
-                                                        10
-                                                    )
                                                 end
 
                                             else
@@ -2671,18 +3175,29 @@ task.spawn(
 
                                         else
 
+                                            --==============================
+                                            -- PICKUP NOT CONFIRMED
+                                            --==============================
+                                            --
+                                            -- IMPORTANT:
+                                            -- Do NOT return to plot.
+                                            --
+                                            -- The next scan will look for
+                                            -- another eligible egg.
+                                            --==============================
+
                                             releaseAutoFarmAirHold()
+
+                                            cachedBestEgg =
+                                                nil
 
                                             notify(
                                                 AUTO_FARM_TAB_NAME,
-                                                "Could not simulate E",
+                                                "Egg pickup not confirmed - scanning again",
                                                 2,
                                                 10
                                             )
 
-                                            task.wait(
-                                                0.25
-                                            )
                                         end
 
                                     else
@@ -2699,6 +3214,7 @@ task.spawn(
 
                                 autoFarmActionBusy =
                                     false
+
                             end
                         )
 
@@ -2711,11 +3227,15 @@ task.spawn(
 
                         cachedBestEgg =
                             nil
+
                     end
+
                 end
 
                 task.wait(0.05)
+
             end
+
         end
 
         releaseAutoFarmAirHold()
@@ -2729,7 +3249,7 @@ task.spawn(
 
 notify(
     TAB_NAME,
-    "Ride a Pet loaded - Independent chance filters / Air hold enabled",
+    "Ride a Pet loaded - Pickup verification enabled",
     3,
     10
 )
