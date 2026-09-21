@@ -293,111 +293,6 @@ local function setAutoFarmMinimumChance(index)
 end
 
 --==================================================
--- AUTO FARM AIR HOLD
---==================================================
-
-local autoFarmAirHold = false
-local autoFarmAirPosition = nil
-local autoFarmAirConn = nil
-
-local function setAutoFarmAirHold(value)
-
-    autoFarmAirHold =
-        value == true
-
-    if not autoFarmAirHold then
-
-        autoFarmAirPosition = nil
-
-        if autoFarmAirConn then
-            autoFarmAirConn:Disconnect()
-            autoFarmAirConn = nil
-        end
-
-        return
-    end
-
-    if autoFarmAirConn then
-        autoFarmAirConn:Disconnect()
-        autoFarmAirConn = nil
-    end
-
-    local character =
-        LP.Character
-
-    local root =
-        character
-        and character:FindFirstChild(
-            "HumanoidRootPart"
-        )
-
-    if root then
-
-        autoFarmAirPosition =
-            root.Position
-
-    else
-
-        autoFarmAirPosition = nil
-
-    end
-
-    autoFarmAirConn =
-        RunService.RenderStepped:Connect(
-            function()
-
-                if not autoFarmAirHold
-                    or not overlayState.active then
-
-                    return
-                end
-
-                local currentCharacter =
-                    LP.Character
-
-                local currentRoot =
-                    currentCharacter
-                    and currentCharacter:FindFirstChild(
-                        "HumanoidRootPart"
-                    )
-
-                if not currentRoot then
-                    return
-                end
-
-                if not autoFarmAirPosition then
-
-                    autoFarmAirPosition =
-                        currentRoot.Position
-
-                end
-
-                pcall(function()
-
-                    currentRoot.CFrame =
-                        CFrame.new(
-                            autoFarmAirPosition
-                        )
-
-                    currentRoot.AssemblyLinearVelocity =
-                        Vector3.zero
-
-                    currentRoot.AssemblyAngularVelocity =
-                        Vector3.zero
-
-                end)
-
-            end
-        )
-end
-
-local function releaseAutoFarmAirHold()
-
-    setAutoFarmAirHold(false)
-
-end
-
---==================================================
 -- WAYPOINT
 --==================================================
 
@@ -1495,8 +1390,6 @@ local function setAutoFarm(value)
         autoFarmActionBusy =
             false
 
-        releaseAutoFarmAirHold()
-
         notify(
             AUTO_FARM_TAB_NAME,
             "Auto Farm disabled",
@@ -2545,8 +2438,6 @@ _G.RidePetOverlay_Unload =
         autoFarmActionBusy =
             false
 
-        releaseAutoFarmAirHold()
-
         waypointTravelToken =
             waypointTravelToken + 1
 
@@ -2627,8 +2518,6 @@ task.spawn(
                 cachedBestEgg = nil
                 nextScan = 0
 
-                releaseAutoFarmAirHold()
-
                 task.wait(0.25)
 
             else
@@ -2694,8 +2583,6 @@ task.spawn(
                                 eggPos.Z
                             )
 
-                        setAutoFarmAirHold(true)
-
                         task.spawn(
                             function()
 
@@ -2705,8 +2592,6 @@ task.spawn(
 
                                 if not autoFarm
                                     or not overlayState.active then
-
-                                    releaseAutoFarmAirHold()
 
                                     autoFarmActionBusy =
                                         false
@@ -2743,8 +2628,6 @@ task.spawn(
                                             secondEggPos.Z
                                         )
 
-                                    setAutoFarmAirHold(true)
-
                                     task.wait(
                                         autoFarmPickupDelay
                                     )
@@ -2770,8 +2653,6 @@ task.spawn(
                                         end
 
                                         if pickupConfirmed then
-
-                                            releaseAutoFarmAirHold()
 
                                             task.wait(
                                                 autoFarmPostPickupDelay
@@ -2817,10 +2698,6 @@ task.spawn(
 
                                                 end
 
-                                            else
-
-                                                releaseAutoFarmAirHold()
-
                                             end
 
                                         else
@@ -2829,22 +2706,14 @@ task.spawn(
                                             -- Do NOT return to waypoint.
                                             -- Rescan and retry.
 
-                                            releaseAutoFarmAirHold()
-
                                             cachedBestEgg =
                                                 nil
 
                                         end
 
-                                    else
-
-                                        releaseAutoFarmAirHold()
-
                                     end
 
                                 else
-
-                                    releaseAutoFarmAirHold()
 
                                     cachedBestEgg =
                                         nil
@@ -2858,8 +2727,6 @@ task.spawn(
                         )
 
                     else
-
-                        releaseAutoFarmAirHold()
 
                         autoFarmActionBusy =
                             false
@@ -2876,8 +2743,6 @@ task.spawn(
             end
 
         end
-
-        releaseAutoFarmAirHold()
 
     end
 )
