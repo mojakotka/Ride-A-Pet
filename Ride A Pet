@@ -40,6 +40,10 @@ local AUTO_FARM_SCAN_RATE = 0.35
 local AUTO_FARM_PICKUP_CHECK_TIME = 3
 local AUTO_FARM_PICKUP_CHECK_INTERVAL = 0.15
 
+-- Wait this long after returning to the plot
+-- before Auto Farm starts looking for another egg.
+local autoFarmReturnWait = 5
+
 --==================================================
 -- TIERS
 --==================================================
@@ -2674,6 +2678,19 @@ task.spawn(
                                                             2,
                                                             10
                                                         )
+
+                                                        -- Wait 5 seconds
+                                                        -- before starting the
+                                                        -- next Auto Farm cycle.
+                                                        task.wait(
+                                                            autoFarmReturnWait
+                                                        )
+
+                                                        -- Force a fresh scan
+                                                        -- instead of immediately
+                                                        -- reusing the previous egg.
+                                                        cachedBestEgg = nil
+                                                        nextScan = 0
 
                                                     else
 
